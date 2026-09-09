@@ -37,6 +37,15 @@ def is_blocked_host(host):
     )
 
 
+def is_allowed_contact_source(source_url):
+    if not source_url:
+        return True
+    parsed = urlparse(source_url)
+    if not parsed.scheme or not parsed.netloc:
+        return False
+    return not is_blocked_host(parsed.netloc)
+
+
 def is_allowed_contact_email(email):
     value = (email or "").strip().lower()
     if not EMAIL_RE.fullmatch(value):
@@ -155,10 +164,14 @@ def quarantine_unsafe_contacts(db_path=None):
     rejected_contacts = 0
     rejected_messages = 0
     with transaction(db_path) as conn:
-        contact_rows = conn.execute("SELECT id,email,status FROM contacts").fetchall()
+        contact_rows = conn.execute("SELECT id,email,source_url,status FROM contacts").fetchall()
         unsafe_contact_ids = []
         for row in contact_rows:
-            if is_allowed_contact_email(row["email"]):
+            unsafe = (
+                not is_allowed_contact_email(row["email"])
+                or not is_allowed_contact_source(row["source_url"])
+            )
+            if not unsafe:
                 continue
             unsafe_contact_ids.append(int(row["id"]))
             if row["status"] != "REJECTED":
@@ -190,19 +203,20 @@ def save_contacts(case_id, contacts, db_path=None):
     with transaction(db_path) as conn:
         for item in contacts:
             email = item["email"].strip().lower()
-            if not is_allowed_contact_email(email):
+            source_url = item.get("source_url")
+            if not is_allowed_contact_email(email) or not is_allowed_contact_source(source_url):
                 continue
             existing = conn.execute("SELECT id FROM contacts WHERE case_id=? AND email=?", (int(case_id), email)).fetchone()
             if existing:
                 conn.execute(
                     "UPDATE contacts SET source_url=?,confidence_label=?,status='DISCOVERED',updated_at=? WHERE id=?",
-                    (item.get("source_url"), item.get("confidence_label", "LOW"), now, existing["id"]),
+                    (source_url, item.get("confidence_label", "LOW"), now, existing["id"]),
                 )
             else:
                 conn.execute(
                     """INSERT INTO contacts(case_id,company_name,email,source_url,confidence_label,status,created_at,updated_at)
                        VALUES(?,?,?,?,?,'DISCOVERED',?,?)""",
-                    (int(case_id), case.get("company_name") or case.get("detected_company_name"), email, item.get("source_url"), item.get("confidence_label", "LOW"), now, now),
+                    (int(case_id), case.get("company_name") or case.get("detected_company_name"), email, source_url, item.get("confidence_label", "LOW"), now, now),
                 )
                 created += 1
     return {"created": created, "contacts": list_contacts(case_id=case_id, db_path=db_path)}
@@ -214,7 +228,7 @@ def list_contacts(case_id=None, db_path=None):
     if case_id is not None:
         query += " WHERE case_id=?"
         params.append(int(case_id))
-    query += " ORDER BY CASE confidence_label WHEN 'HIGH' THEN 0 WHEN 'MEDIUM' THEN 1 ELSE 2 END, id"
+    query += " ORDER BY CASE status WHEN 'REJECTED' THEN 1 ELSE 0 END, CASE confidence_label WHEN 'HIGH' THEN 0 WHEN 'MEDIUM' THEN 1 ELSE 2 END, id"
     with transaction(db_path) as conn:
         rows = conn.execute(query, params).fetchall()
     return [row_to_dict(row) for row in rows]
