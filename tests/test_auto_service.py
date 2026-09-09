@@ -128,8 +128,9 @@ class AutoServiceTests(unittest.TestCase):
         result = self._run_with_contact(case_id, saved, smtp_id="<should-not-send@casehunter>")
         self.assertEqual(result["messages_sent"], 0)
         queue = list_outreach(db_path=self.db)
-        self.assertEqual(queue[0]["status"], "NEEDS_CONTACT")
-        self.assertIsNone(queue[0]["recipient_email"])
+        self.assertEqual(queue[0]["status"], "READY_FOR_APPROVAL")
+        self.assertEqual(queue[0]["recipient_email"], "contacto@otraempresa.cl")
+        self.assertEqual(result["policy_auto_send"]["auto_sent"], 0)
 
     def test_daily_limit_blocks_additional_first_contact(self):
         first = import_candidate(candidate("AUTO-LIMIT-OLD", "Rincor SpA", "SAFI 100"), db_path=self.db)["case"]["id"]
