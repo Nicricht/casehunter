@@ -119,6 +119,16 @@ CREATE TABLE IF NOT EXISTS contacts (
     UNIQUE(case_id, email)
 );
 
+CREATE TABLE IF NOT EXISTS contact_assessments (
+    contact_id INTEGER PRIMARY KEY REFERENCES contacts(id) ON DELETE CASCADE,
+    trust_score INTEGER NOT NULL DEFAULT 0,
+    decision TEXT NOT NULL DEFAULT 'REVIEW',
+    reasons TEXT NOT NULL DEFAULT '[]',
+    source_host TEXT,
+    email_domain TEXT,
+    assessed_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS outreach_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     case_id INTEGER NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
@@ -190,6 +200,7 @@ CREATE TABLE IF NOT EXISTS automation_source_state (
 );
 
 CREATE INDEX IF NOT EXISTS idx_contacts_case ON contacts(case_id);
+CREATE INDEX IF NOT EXISTS idx_contact_assessments_decision ON contact_assessments(decision, trust_score);
 CREATE INDEX IF NOT EXISTS idx_outreach_status ON outreach_messages(status);
 CREATE INDEX IF NOT EXISTS idx_outreach_case ON outreach_messages(case_id);
 CREATE INDEX IF NOT EXISTS idx_replies_case ON outreach_replies(case_id);
