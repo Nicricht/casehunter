@@ -1,58 +1,198 @@
-# Case Hunter Auto v2.3.0
+# Case Hunter Auto v3.0.0
 
 **Repositorio oficial:** `Nicricht/casehunter`
 
-Sistema para detectar, priorizar y gestionar casos administrativos de proveedores del Estado a partir de fuentes públicas, con prospección, seguimiento y monitoreo de respuestas.
+Case Hunter detecta, prioriza y gestiona oportunidades administrativas de proveedores del Estado a partir de fuentes públicas. Su objetivo no es maximizar correos enviados, sino convertir señales públicas en casos validados, conversaciones útiles, bloqueos identificados y resultados medibles.
 
-## Flujo completo
+## Flujo operativo
 
 ```text
 Fuentes públicas
-→ detectar caso
-→ deduplicar
-→ priorizar
-→ buscar contacto público
-→ generar correo
-→ aprobación humana del primer contacto
-→ envío
-→ verificar duplicados en Gmail
+→ Hunter / Scanner
+→ detectar y deduplicar caso
+→ priorizar oportunidad
+→ descubrir contactos públicos
+→ Contact Trust Engine
+→ Outreach Policy Engine
+→ enviar automáticamente cuando la evidencia supera la política
+→ comprobar duplicados en Gmail
 → programar follow-up
 → leer respuestas por IMAP
-→ clasificar respuesta
-→ actualizar caso
-→ crear siguiente acción
-→ cancelar follow-up si hubo respuesta
+→ Reply Intelligence Engine
+→ actualizar caso y crear siguiente acción
 → continuar hasta cierre
+→ medir respuesta y resolución
 ```
 
-## Funcionalidades principales
+## Motores de decisión
 
-- Descubrimiento desde Ley del Lobby.
-- Integración opcional con Mercado Público por RUT mediante ticket oficial.
-- Extracción de SAFI, montos y señales contractuales.
-- Deduplicación de casos.
-- Diagnóstico de bloqueos.
-- Resolution Playbook por tipo de bloqueo.
-- Checklist documental.
-- Acciones, responsables y fechas de seguimiento.
-- Línea de tiempo por caso.
-- Priorización financiera con advertencia sobre montos no confirmados.
-- Descubrimiento de contactos públicos con filtros de seguridad.
-- Generación de primer correo personalizado.
-- Aprobación humana obligatoria antes del primer envío.
-- Detección de contactos ya utilizados mediante Gmail/IMAP antes del envío.
-- Envío autenticado por Gmail/SMTP.
-- Monitoreo automático de respuestas por Gmail/IMAP.
-- Clasificación automática de respuestas: `POSITIVE`, `REQUESTS_INFO`, `STILL_PENDING`, `RESOLVED`, `NOT_INTERESTED`, `NEGATIVE`, `OTHER`.
-- Creación automática de la siguiente acción según la respuesta.
-- Follow-up programado después del primer envío y cancelado automáticamente cuando llega una respuesta.
-- Ejecución cloud cada 6 horas mediante GitHub Actions.
-- Persistencia SQLite.
-- API FastAPI y frontend web.
-- Autenticación Basic opcional.
-- Tests automatizados en GitHub Actions.
+### Contact Trust Engine
 
-## Inicio rápido
+`casehunter/engines/contact_trust.py`
+
+Evalúa la evidencia de identidad del contacto. La igualdad de dominio es una señal fuerte, pero ya no es obligatoria.
+
+Ejemplos:
+
+```text
+contacto@valko.cl publicado en valko.cl
+→ evidencia fuerte
+
+prevcons@gmail.com publicado en prevcons.cl
+→ puede ser evidencia fuerte aunque el dominio del correo sea Gmail
+
+correo aleatorio publicado solo en un directorio no relacionado
+→ no habilita autoenvío
+```
+
+El resultado incluye `trust_score`, decisión y razones auditables.
+
+### Outreach Policy Engine
+
+`casehunter/engines/outreach_policy.py`
+
+Decide si un primer contacto puede enviarse sin intervención humana. Evalúa, entre otros factores:
+
+- prioridad financiera mínima;
+- estado del contacto;
+- score de confianza;
+- relación entre empresa y fuente del contacto;
+- límite diario de primeros contactos.
+
+Decisiones posibles: `AUTO_SEND`, `REVIEW`, `HOLD` y `REJECT`.
+
+### Reply Intelligence Engine
+
+`casehunter/engines/reply_intelligence.py`
+
+Convierte respuestas en intención y siguiente acción estructurada.
+
+```text
+"Sí, envíamela"
+→ REQUESTS_INFO
+→ VALIDATING
+→ SEND_PUBLIC_SUMMARY
+
+"Sigue pendiente"
+→ STILL_PENDING
+→ VALIDATING
+→ CONFIRM_CURRENT_BLOCKER
+
+"Ya está resuelto"
+→ RESOLVED
+→ caso RESOLVED
+
+"No nos interesa"
+→ NOT_INTERESTED
+→ NO_FURTHER_OUTREACH
+```
+
+## Contactos y evidencia
+
+Case Hunter no trata `@gmail.com`, `@outlook.com` u otro dominio externo como falso por defecto. Lo importante es la evidencia que vincula el correo con la empresa.
+
+Los contactos guardan una evaluación separada en `contact_assessments` con:
+
+- `trust_score`;
+- `decision`;
+- razones de la decisión;
+- dominio de la fuente;
+- dominio del correo;
+- fecha de evaluación.
+
+Las páginas de buscadores, dominios gubernamentales usados como fuente de contacto y hosts bloqueados no habilitan autoenvío. Los contactos inseguros se ponen en cuarentena o se rechazan.
+
+## Envío automático
+
+En cloud, el autoenvío está gobernado por política. No requiere aprobación humana cuando el caso y el contacto superan todos los controles configurados.
+
+Antes del envío real, Gmail/IMAP comprueba si el destinatario ya fue contactado. Si existe un contacto anterior, el mensaje queda `SKIPPED_DUPLICATE`.
+
+Variables principales:
+
+```text
+CASE_HUNTER_AUTO_POLICY_SEND=1
+CASE_HUNTER_AUTO_SEND_APPROVED=1
+CASE_HUNTER_AUTO_SEND_MIN_PRIORITY=70
+CASE_HUNTER_AUTO_MAX_FIRST_CONTACTS_PER_DAY=10
+```
+
+## Gmail
+
+Case Hunter usa SMTP para enviar e IMAP para verificar duplicados y leer respuestas.
+
+Nunca guardes la contraseña normal de Gmail en el repositorio. Usa una contraseña de aplicación y GitHub Actions Secrets.
+
+El workflow espera:
+
+```text
+CASE_HUNTER_GMAIL_USERNAME
+CASE_HUNTER_GMAIL_APP_PASSWORD
+```
+
+Los secretos de Gmail se exponen únicamente al paso real de producción, no a las pruebas unitarias.
+
+## Operaciones y KPIs
+
+El endpoint:
+
+```text
+GET /api/operations
+```
+
+presenta métricas orientadas al negocio:
+
+- casos totales, activos y resueltos;
+- contactos encontrados;
+- contactos aptos para autoenvío;
+- primeros contactos enviados;
+- respuestas recibidas;
+- acciones abiertas;
+- follow-ups pendientes;
+- tasa de respuesta;
+- tasa de resolución;
+- oportunidades principales ordenadas por prioridad y confianza de contacto.
+
+## Resolution Playbooks
+
+Case Hunter mantiene playbooks operativos por tipo de bloqueo. Una señal pública no se convierte automáticamente en una afirmación de dinero recuperable. Cuando la empresa confirma información privada o actual, el caso puede reclasificarse y el playbook cambia según el bloqueo real.
+
+Ejemplos de rutas:
+
+```text
+DOCUMENT_MISSING
+→ identificar documento
+→ responsable
+→ envío
+→ evidencia de presentación
+→ seguimiento
+
+RETENTION_RELEASE_PENDING
+→ validar requisitos
+→ solicitud
+→ unidad responsable
+→ seguimiento
+
+LIQUIDATION_PENDING
+→ verificar hitos
+→ detectar hito faltante
+→ antecedentes
+→ escalamiento
+```
+
+## Cloud
+
+El workflow principal está en:
+
+```text
+.github/workflows/case-hunter-auto.yml
+```
+
+Se ejecuta aproximadamente cada 6 horas y también permite ejecución manual. Actualmente conserva el estado SQLite mediante GitHub Actions cache.
+
+Esta es una arquitectura válida para validación y operación inicial. La arquitectura objetivo de producción persistente está documentada en `ARCHITECTURE.md` e incluye una futura migración controlada a PostgreSQL y un worker/servicio permanente. Esa migración no se activa automáticamente para evitar crear infraestructura de pago sin una decisión explícita.
+
+## API y frontend
 
 ```bash
 python -m pip install -r requirements.txt
@@ -60,111 +200,35 @@ python -m casehunter init
 python -m casehunter serve
 ```
 
-Abre `http://127.0.0.1:8000`.
-
-## Comandos
-
-```bash
-python -m casehunter auto
-python -m casehunter auto --daemon --interval-minutes 360
-python -m casehunter mail-sync
-python -m casehunter followups
-python -m casehunter followups --send
-python -m casehunter verify
-```
-
-## Gmail
-
-Case Hunter usa SMTP para enviar e IMAP para verificar duplicados y leer respuestas.
-
-Nunca guardes una contraseña normal de Gmail en el repositorio. Usa una contraseña de aplicación y variables de entorno o GitHub Actions Secrets.
-
-Variables relevantes:
+Luego abre:
 
 ```text
-CASE_HUNTER_SMTP_USERNAME
-CASE_HUNTER_SMTP_PASSWORD
-CASE_HUNTER_IMAP_USERNAME
-CASE_HUNTER_IMAP_PASSWORD
+http://127.0.0.1:8000
 ```
 
-En GitHub Actions el workflow espera estos secretos:
+Endpoints principales:
 
 ```text
-CASE_HUNTER_GMAIL_USERNAME
-CASE_HUNTER_GMAIL_APP_PASSWORD
+/api/dashboard
+/api/operations
+/api/cases
+/api/contacts
+/api/outreach
+/api/replies
+/api/followups
+/api/auto/status
+/api/auto/runs
 ```
 
-Si esos secretos no existen, Case Hunter sigue detectando casos y preparando prospectos, pero no envía ni lee Gmail.
+## Privacidad
 
-## Seguridad del outreach
-
-- El primer contacto nunca se envía sin aprobación humana previa.
-- Antes de enviar, si Gmail está configurado, Case Hunter comprueba si ese destinatario ya fue contactado.
-- Si detecta un contacto previo, el mensaje queda `SKIPPED_DUPLICATE`.
-- Los contactos de fuentes bloqueadas o buscadores no confiables se rechazan automáticamente.
-- Solo contactos con confianza `HIGH` pasan directamente a `READY_FOR_APPROVAL`.
-- Los montos públicos no se presentan como dinero recuperable.
-
-## Respuestas y siguiente acción
-
-Ejemplos:
-
-```text
-"Sí, envíamela"
-→ REQUESTS_INFO
-→ caso VALIDATING
-→ acción SEND_PUBLIC_SUMMARY
-
-"Sigue pendiente"
-→ STILL_PENDING
-→ caso VALIDATING
-→ acción CONFIRM_CURRENT_BLOCKER
-
-"Ya está resuelto"
-→ RESOLVED
-→ caso RESOLVED
-→ follow-up cancelado
-
-"No nos interesa"
-→ NOT_INTERESTED
-→ acción NO_FURTHER_OUTREACH
-→ follow-up cancelado
-```
-
-Por privacidad, el modo cloud no persiste por defecto el cuerpo ni el asunto de las respuestas recibidas. Solo conserva los metadatos mínimos y la clasificación. Esto se controla con:
+Por defecto, el modo cloud no persiste el cuerpo ni el asunto completo de las respuestas recibidas:
 
 ```text
 CASE_HUNTER_STORE_REPLY_CONTENT=0
 ```
 
-## Follow-up
-
-Después de un primer mensaje enviado y previamente aprobado, Case Hunter programa un seguimiento. El plazo predeterminado es 5 días:
-
-```text
-CASE_HUNTER_AUTO_FOLLOWUP_DAYS=5
-```
-
-Si llega una respuesta antes, el seguimiento se cancela. En cloud el envío automático de follow-ups está preparado y solo se activa de forma efectiva cuando las credenciales SMTP existen.
-
-## Cloud 24/7
-
-El workflow está en:
-
-```text
-.github/workflows/case-hunter-auto.yml
-```
-
-Se ejecuta aproximadamente cada 6 horas y mantiene el estado entre ciclos mediante GitHub Actions cache. El artifact público de cada ejecución contiene únicamente el resumen JSON del ciclo, no la base SQLite.
-
-## Resolution Playbook
-
-Cuando el bloqueo cambia por información confirmada de la empresa, el caso puede reclasificarse. Por ejemplo, una liquidación pendiente puede convertirse en `DOCUMENT_MISSING` si el proveedor confirma que faltan antecedentes.
-
-Cada playbook contiene preguntas de confirmación, acciones ordenadas, responsable sugerido, plazo operativo, evidencia esperada, escalamiento y condiciones de cierre.
-
-Las recomendaciones deben contrastarse con las bases, el contrato y el expediente aplicable a cada caso.
+Se conserva la clasificación y los metadatos mínimos necesarios para continuar el caso.
 
 ## Pruebas
 
@@ -172,4 +236,19 @@ Las recomendaciones deben contrastarse con las bases, el contrato y el expedient
 python -m casehunter verify
 ```
 
-La suite cubre API, detector, casos públicos de regresión 2026, Mercado Público, repository, playbooks, outreach, seguridad de contactos, respuestas, follow-ups y deduplicación de Gmail.
+La suite cubre API, detector, casos públicos de regresión 2026, Mercado Público, repository, playbooks, confianza de contactos, política de autoenvío, Gmail, clasificación de respuestas, follow-ups, métricas operativas y deduplicación.
+
+## Principio del producto
+
+```text
+NO optimizar por:
+"cantidad de emails enviados"
+
+SÍ optimizar por:
+casos confirmados
+→ bloqueos identificados
+→ respuestas útiles
+→ acciones completadas
+→ casos resueltos
+→ resultados comerciales medibles
+```
