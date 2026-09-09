@@ -33,6 +33,7 @@ from .auto_service import auto_status, list_auto_runs, run_auto_cycle
 from .contact_discovery import list_contacts
 from .followup import list_followups, process_due_followups
 from .gmail_service import imap_configured
+from .operations import operations_snapshot
 from .outreach import approve_outreach, attach_recipient, list_outreach, reject_outreach, send_outreach, smtp_configured
 from .reply_monitor import list_replies, sync_replies
 
@@ -96,6 +97,10 @@ def create_app(db_path=None, auth_username=None, auth_password=None):
     @app.get("/api/dashboard")
     def get_dashboard():
         return dashboard(app.state.db_path)
+
+    @app.get("/api/operations")
+    def get_operations(top_limit: int = 10):
+        return operations_snapshot(app.state.db_path, top_limit)
 
     @app.get("/api/playbooks")
     def get_playbooks():
