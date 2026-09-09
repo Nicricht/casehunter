@@ -3,15 +3,20 @@ import time
 
 from .config import (
     AUTO_CASES_PER_CYCLE, AUTO_CONTACT_DISCOVERY, AUTO_ENRICH_LIMIT, AUTO_INDEX_PAGES,
-    AUTO_INTERVAL_MINUTES, AUTO_MAX_PAGES, AUTO_MIN_PRIORITY, AUTO_MONITOR_REPLIES,
-    AUTO_SEND_APPROVED, AUTO_SEND_FOLLOWUPS, AUTO_SOURCE_URLS, AUTO_SUBJECTS_PER_CYCLE,
+    AUTO_INTERVAL_MINUTES, AUTO_MAX_FIRST_CONTACTS_PER_DAY, AUTO_MAX_PAGES, AUTO_MIN_PRIORITY,
+    AUTO_MONITOR_REPLIES, AUTO_POLICY_SEND, AUTO_SEND_APPROVED, AUTO_SEND_FOLLOWUPS,
+    AUTO_SEND_MIN_PRIORITY, AUTO_SOURCE_URLS, AUTO_SUBJECTS_PER_CYCLE,
 )
-from .contact_discovery import discover_contacts_for_case, quarantine_unsafe_contacts
+from .contact_discovery import (
+    discover_contacts_for_case,
+    is_verified_corporate_contact,
+    quarantine_unsafe_contacts,
+)
 from .discovery.source_index import expand_year_index, is_year_index
 from .database import row_to_dict, transaction, utc_now
 from .followup import process_due_followups
 from .gmail_service import imap_configured
-from .outreach import ensure_outreach_draft, list_outreach, send_outreach, smtp_configured
+from .outreach import approve_outreach, ensure_outreach_draft, list_outreach, send_outreach, smtp_configured
 from .reply_monitor import sync_replies
 from .repository import get_case
 from .scanner_service import run_ley_lobby_scan
@@ -64,6 +69,31 @@ def _finish_run(run_id, metrics, error=None, db_path=None):
         )
 
 
+def _sent_today_count(db_path=None):
+    today = utc_now()[:10]
+    with transaction(db_path) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) n FROM outreach_messages WHERE sent_at IS NOT NULL AND substr(sent_at,1,10)=?",
+            (today,),
+        ).fetchone()
+    return int(row["n"])
+
+
+def _policy_candidates(db_path=None):
+    with transaction(db_path) as conn:
+        rows = conn.execute(
+            """SELECT o.id message_id,o.recipient_email,o.contact_id,
+                      c.company_name,c.source_url,c.confidence_label,c.status contact_status,
+                      k.financial_priority,k.detected_company_name
+               FROM outreach_messages o
+               JOIN cases k ON k.id=o.case_id
+               JOIN contacts c ON c.id=o.contact_id
+               WHERE o.status='READY_FOR_APPROVAL'
+               ORDER BY k.financial_priority DESC,o.id ASC"""
+        ).fetchall()
+    return [row_to_dict(row) for row in rows]
+
+
 def list_auto_runs(limit=20, db_path=None):
     with transaction(db_path) as conn:
         rows = conn.execute("SELECT * FROM automation_runs ORDER BY id DESC LIMIT ?", (max(1, min(100, int(limit))),)).fetchall()
@@ -95,6 +125,10 @@ def auto_status(db_path=None):
         "interval_minutes": AUTO_INTERVAL_MINUTES,
         "contact_discovery": AUTO_CONTACT_DISCOVERY,
         "send_approved_automatically": AUTO_SEND_APPROVED,
+        "policy_auto_send": AUTO_POLICY_SEND,
+        "policy_send_min_priority": AUTO_SEND_MIN_PRIORITY,
+        "max_first_contacts_per_day": AUTO_MAX_FIRST_CONTACTS_PER_DAY,
+        "sent_today": _sent_today_count(db_path),
         "smtp_configured": smtp_configured(),
         "gmail_monitoring_configured": imap_configured(),
         "monitor_replies": AUTO_MONITOR_REPLIES,
@@ -119,6 +153,17 @@ def run_auto_cycle(source_urls=None, min_priority=None, max_pages=None, enrich_l
     touched = []
     reply_sync = {"configured": False, "checked": 0, "created": 0, "classifications": {}}
     followups = {"due": 0, "sent": 0, "failed": 0, "automatic_send": False}
+    sent_before = _sent_today_count(db_path)
+    policy = {
+        "enabled": bool(AUTO_POLICY_SEND and do_send),
+        "min_priority": AUTO_SEND_MIN_PRIORITY,
+        "daily_limit": AUTO_MAX_FIRST_CONTACTS_PER_DAY,
+        "sent_today_before": sent_before,
+        "auto_approved": 0,
+        "auto_sent": 0,
+        "skipped_policy": 0,
+        "limit_reached": sent_before >= AUTO_MAX_FIRST_CONTACTS_PER_DAY,
+    }
     try:
         quarantine_unsafe_contacts(db_path)
 
@@ -155,18 +200,50 @@ def run_auto_cycle(source_urls=None, min_priority=None, max_pages=None, enrich_l
                 metrics["drafts_created"] += 1
 
         if do_send:
+            remaining = max(0, AUTO_MAX_FIRST_CONTACTS_PER_DAY - _sent_today_count(db_path))
+
             for message in list_outreach(status="APPROVED", db_path=db_path):
+                if remaining <= 0:
+                    policy["limit_reached"] = True
+                    break
                 sent = send_outreach(message["id"], db_path)
                 if sent.get("status") == "SENT":
                     metrics["messages_sent"] += 1
+                    remaining -= 1
+
+            if AUTO_POLICY_SEND and remaining > 0:
+                for candidate in _policy_candidates(db_path):
+                    if remaining <= 0:
+                        policy["limit_reached"] = True
+                        break
+                    priority = int(candidate.get("financial_priority") or 0)
+                    company_name = candidate.get("company_name") or candidate.get("detected_company_name") or ""
+                    verified = is_verified_corporate_contact(
+                        candidate.get("recipient_email"),
+                        candidate.get("source_url"),
+                        candidate.get("confidence_label"),
+                        company_name,
+                    )
+                    if candidate.get("contact_status") == "REJECTED" or priority < AUTO_SEND_MIN_PRIORITY or not verified:
+                        policy["skipped_policy"] += 1
+                        continue
+                    approve_outreach(candidate["message_id"], db_path=db_path)
+                    policy["auto_approved"] += 1
+                    sent = send_outreach(candidate["message_id"], db_path)
+                    if sent.get("status") == "SENT":
+                        metrics["messages_sent"] += 1
+                        policy["auto_sent"] += 1
+                        remaining -= 1
 
         followups = process_due_followups(db_path=db_path)
+        policy["sent_today_after"] = _sent_today_count(db_path)
         _finish_run(run_id, metrics, db_path=db_path)
         return {
             "run_id": run_id,
             **metrics,
             "email_send_requested": requested_send,
             "email_send_active": do_send,
+            "policy_auto_send": policy,
             "reply_sync": reply_sync,
             "followups": followups,
             "queue": list_outreach(db_path=db_path),
