@@ -28,7 +28,7 @@ function setView(view) {
     cases:['Casos','De la señal pública al cierre administrativo.'],
     companies:['Empresas','Relaciona proveedores con los casos detectados.'],
     scan:['Descubrir','Convierte fuentes públicas en casos accionables.'],
-    auto:['Auto','Prospección automática con aprobación humana antes del envío.'],
+    auto:['Auto','Detección, contacto, respuesta y seguimiento en un solo ciclo.'],
     detail:['Detalle del caso','Diagnóstico, documentos, acciones y línea de tiempo.'],
   };
   const t = titles[view] || titles.dashboard;
@@ -108,13 +108,23 @@ async function openCase(id) {
 }
 
 async function loadAuto() {
-  const [status, queue, runs] = await Promise.all([api('/api/auto/status'), api('/api/outreach'), api('/api/auto/runs')]);
+  const [status, queue, runs, replies, followups] = await Promise.all([
+    api('/api/auto/status'), api('/api/outreach'), api('/api/auto/runs'), api('/api/replies?limit=20'), api('/api/followups?limit=20')
+  ]);
   const counts = status.queue_counts || {};
-  $('auto-metrics').innerHTML = [['Por aprobar',counts.READY_FOR_APPROVAL||0],['Sin contacto',counts.NEEDS_CONTACT||0],['Aprobados',counts.APPROVED||0],['Enviados',counts.SENT||0]].map(([label,value]) => `<div class="metric"><div class="label">${label}</div><div class="value">${value}</div></div>`).join('');
+  $('auto-metrics').innerHTML = [
+    ['Por aprobar',counts.READY_FOR_APPROVAL||0],['Sin contacto',counts.NEEDS_CONTACT||0],
+    ['Enviados',counts.SENT||0],['Respondidos',counts.REPLIED||0],
+    ['Respuestas',status.reply_count||0],['Follow-ups pendientes',status.followups_due||0]
+  ].map(([label,value]) => `<div class="metric"><div class="label">${label}</div><div class="value">${value}</div></div>`).join('');
   const last = status.last_run;
-  $('auto-status').innerHTML = last ? `Último ciclo: <strong>${esc(last.status)}</strong> · ${last.cases_created} caso(s) nuevo(s) · ${last.drafts_created} borrador(es) · ${last.contacts_found} contacto(s).` : 'Todavía no se ha ejecutado Case Hunter Auto.';
+  const mailState = status.gmail_monitoring_configured ? 'Gmail conectado' : 'Gmail sin credenciales';
+  const sendState = status.smtp_configured ? 'envío habilitado' : 'envío deshabilitado';
+  $('auto-status').innerHTML = last ? `Último ciclo: <strong>${esc(last.status)}</strong> · ${last.cases_created} caso(s) nuevo(s) · ${last.drafts_created} borrador(es) · ${last.contacts_found} contacto(s).<br>${mailState} · ${sendState}.` : `Todavía no se ha ejecutado Case Hunter Auto.<br>${mailState} · ${sendState}.`;
   $('auto-runs').innerHTML = runs.length ? runs.slice(0,8).map(r => `<div class="list-item"><div class="list-title">${esc(r.status)}</div><div class="list-meta">${esc(r.started_at)} · ${r.cases_created} nuevos · ${r.drafts_created} borradores${r.error ? ` · ${esc(r.error)}` : ''}</div></div>`).join('') : '<div class="empty">Sin ciclos.</div>';
   $('outreach-queue').innerHTML = queue.length ? `<table><thead><tr><th>Empresa</th><th>Prioridad</th><th>Destinatario</th><th>Estado</th><th>Acción</th></tr></thead><tbody>${queue.map(m => `<tr><td><strong>${esc(m.detected_company_name || 'Empresa por confirmar')}</strong><div class="list-meta">${esc(m.contract_ref || '')}</div><details><summary>Ver correo</summary><div class="source-text">${esc(m.body)}</div></details></td><td>${m.financial_priority}</td><td>${esc(m.recipient_email || 'No encontrado')}</td><td>${esc(m.status)}</td><td>${outreachActions(m)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">La cola está vacía.</div>';
+  $('reply-list').innerHTML = replies.length ? replies.map(r => `<div class="list-item"><div class="list-title">${esc(r.classification)}</div><div class="list-meta">${esc(r.sender_email || '')} · caso #${r.case_id}</div><div class="source-text">${esc((r.body || '').slice(0,600))}</div></div>`).join('') : '<div class="empty">Sin respuestas clasificadas.</div>';
+  $('followup-list').innerHTML = followups.length ? followups.map(f => `<div class="list-item"><div class="list-title">${esc(f.detected_company_name || 'Empresa')}</div><div class="list-meta">${esc(f.status)} · ${esc(f.due_at)} · ${esc(f.recipient_email || '')}</div></div>`).join('') : '<div class="empty">Sin seguimientos programados.</div>';
   bindOutreachActions();
 }
 
@@ -127,8 +137,8 @@ function outreachActions(m) {
 
 function bindOutreachActions() {
   document.querySelectorAll('.outreach-recipient').forEach(btn => btn.onclick = async () => { const email = prompt('Correo corporativo verificado'); if (!email) return; try { await api(`/api/outreach/${btn.dataset.id}/recipient`, {method:'PATCH', body:JSON.stringify({recipient_email:email})}); toast('Destinatario agregado'); loadAuto(); } catch(e) { toast(e.message); } });
-  document.querySelectorAll('.outreach-approve-send').forEach(btn => btn.onclick = async () => { try { await api(`/api/outreach/${btn.dataset.id}/approve`, {method:'POST', body:JSON.stringify({recipient_email:null})}); if (state.config.smtp_configured) { await api(`/api/outreach/${btn.dataset.id}/send`, {method:'POST'}); toast('Aprobado y enviado'); } else toast('Aprobado. Configura SMTP para enviar.'); loadAuto(); } catch(e) { toast(e.message); } });
-  document.querySelectorAll('.outreach-send').forEach(btn => btn.onclick = async () => { try { await api(`/api/outreach/${btn.dataset.id}/send`, {method:'POST'}); toast('Correo enviado'); loadAuto(); } catch(e) { toast(e.message); } });
+  document.querySelectorAll('.outreach-approve-send').forEach(btn => btn.onclick = async () => { try { await api(`/api/outreach/${btn.dataset.id}/approve`, {method:'POST', body:JSON.stringify({recipient_email:null})}); if (state.config.smtp_configured) { const sent = await api(`/api/outreach/${btn.dataset.id}/send`, {method:'POST'}); toast(sent.status === 'SENT' ? 'Aprobado y enviado' : `No enviado: ${sent.status}`); } else toast('Aprobado. El ciclo cloud lo enviará cuando Gmail esté configurado.'); loadAuto(); } catch(e) { toast(e.message); } });
+  document.querySelectorAll('.outreach-send').forEach(btn => btn.onclick = async () => { try { const sent = await api(`/api/outreach/${btn.dataset.id}/send`, {method:'POST'}); toast(sent.status === 'SENT' ? 'Correo enviado' : `No enviado: ${sent.status}`); loadAuto(); } catch(e) { toast(e.message); } });
   document.querySelectorAll('.outreach-reject').forEach(btn => btn.onclick = async () => { try { await api(`/api/outreach/${btn.dataset.id}/reject`, {method:'POST'}); toast('Prospecto descartado'); loadAuto(); } catch(e) { toast(e.message); } });
 }
 
@@ -145,8 +155,10 @@ async function boot() {
   $('case-status').onchange = loadCases;
   $('case-search').onkeydown = e => { if (e.key === 'Enter') loadCases(); };
   $('company-form').onsubmit = async e => { e.preventDefault(); try { await api('/api/companies', {method:'POST', body:JSON.stringify({name:$('company-name').value, rut:$('company-rut').value || null})}); e.target.reset(); toast('Empresa guardada'); await loadCompanies(); } catch(err) { toast(err.message); } };
-  $('auto-run').onclick = async () => { const b=$('auto-run'); b.disabled=true; b.textContent='Ejecutando…'; try { const r=await api('/api/auto/run',{method:'POST',body:JSON.stringify({})}); toast(`Auto: ${r.cases_created} casos nuevos, ${r.drafts_created} borradores.`); await Promise.all([loadAuto(),loadDashboard()]); } catch(e) { toast(e.message); } finally { b.disabled=false; b.textContent='Ejecutar ahora'; } };
+  $('auto-run').onclick = async () => { const b=$('auto-run'); b.disabled=true; b.textContent='Ejecutando…'; try { const r=await api('/api/auto/run',{method:'POST',body:JSON.stringify({})}); toast(`Auto: ${r.cases_created} casos nuevos, ${r.drafts_created} borradores, ${r.reply_sync?.created || 0} respuestas.`); await Promise.all([loadAuto(),loadDashboard()]); } catch(e) { toast(e.message); } finally { b.disabled=false; b.textContent='Ejecutar ahora'; } };
   $('auto-refresh').onclick = loadAuto;
+  $('mail-sync').onclick = async () => { try { const r=await api('/api/mail/sync',{method:'POST'}); toast(r.configured ? `${r.created} respuesta(s) nueva(s)` : 'Gmail aún no está configurado'); await Promise.all([loadAuto(),loadDashboard()]); } catch(e) { toast(e.message); } };
+  $('followups-process').onclick = async () => { try { const r=await api('/api/followups/process?send=true',{method:'POST'}); toast(`${r.due} seguimiento(s) vencido(s), ${r.sent} enviado(s)`); await loadAuto(); } catch(e) { toast(e.message); } };
   $('scan-form').onsubmit = async e => { e.preventDefault(); const b=$('scan-button'); b.disabled=true; b.textContent='Escaneando…'; try { const r=await api('/api/scans/ley-lobby',{method:'POST',body:JSON.stringify({url:$('scan-url').value,max_pages:Number($('scan-pages').value),enrich:true,enrich_limit:Number($('scan-enrich').value)})}); $('scan-result').classList.remove('hidden'); $('scan-result').textContent=`Listo. ${r.scan.pages_scanned} página(s), ${r.scan.candidate_count} candidato(s), ${r.import.created} caso(s) nuevo(s).`; await Promise.all([loadScans(),loadDashboard()]); } catch(err) { toast(err.message); } finally { b.disabled=false; b.textContent='Iniciar escaneo'; } };
 }
 

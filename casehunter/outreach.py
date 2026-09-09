@@ -1,6 +1,7 @@
 import hashlib
 import re
 from email.message import EmailMessage
+from email.utils import make_msgid
 import smtplib
 
 from .config import SMTP_FROM_NAME, SMTP_HOST, SMTP_PASSWORD, SMTP_PORT, SMTP_USERNAME
@@ -8,7 +9,10 @@ from .database import row_to_dict, transaction, utc_now
 from .repository import get_case
 
 EMAIL_RE = re.compile(r"^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$", re.I)
-VALID_OUTREACH_STATUSES = {"NEEDS_CONTACT", "READY_FOR_APPROVAL", "APPROVED", "SENT", "FAILED", "REJECTED"}
+VALID_OUTREACH_STATUSES = {
+    "NEEDS_CONTACT", "READY_FOR_APPROVAL", "APPROVED", "SENT", "REPLIED",
+    "FAILED", "REJECTED", "SKIPPED_DUPLICATE",
+}
 
 
 def _problem_summary(case):
@@ -156,7 +160,7 @@ def approve_outreach(message_id, recipient_email=None, db_path=None):
     if recipient_email:
         attach_recipient(message_id, recipient_email, db_path=db_path)
     message = get_outreach(message_id, db_path)
-    if message["status"] == "SENT":
+    if message["status"] in {"SENT", "REPLIED"}:
         raise ValueError("El mensaje ya fue enviado")
     if not message.get("recipient_email"):
         raise ValueError("Falta un correo de destinatario confirmado")
@@ -180,16 +184,17 @@ def smtp_configured():
 
 def _send_smtp(recipient, subject, body):
     if not smtp_configured():
-        raise RuntimeError("SMTP no configurado. Define CASE_HUNTER_SMTP_USERNAME y CASE_HUNTER_SMTP_PASSWORD fuera del código.")
+        raise RuntimeError("SMTP no configurado. Define las credenciales de Gmail fuera del código.")
     msg = EmailMessage()
     msg["From"] = f"{SMTP_FROM_NAME} <{SMTP_USERNAME}>" if SMTP_FROM_NAME else SMTP_USERNAME
     msg["To"] = recipient
     msg["Subject"] = subject
+    msg["Message-ID"] = make_msgid()
     msg.set_content(body)
     with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=30) as server:
         server.login(SMTP_USERNAME, SMTP_PASSWORD)
         server.send_message(msg)
-    return msg.get("Message-ID") or "smtp-sent"
+    return msg["Message-ID"]
 
 
 def send_outreach(message_id, db_path=None, sender=None):
@@ -198,6 +203,18 @@ def send_outreach(message_id, db_path=None, sender=None):
         raise ValueError("El mensaje debe estar aprobado antes de enviarse")
     if message["status"] == "FAILED" and not message.get("approved_at"):
         raise ValueError("El mensaje fallido no tiene aprobación previa")
+
+    if sender is None:
+        from .gmail_service import imap_configured, was_recipient_contacted
+        if imap_configured() and was_recipient_contacted(message["recipient_email"]):
+            now = utc_now()
+            with transaction(db_path) as conn:
+                conn.execute(
+                    "UPDATE outreach_messages SET status='SKIPPED_DUPLICATE',last_error=?,updated_at=? WHERE id=?",
+                    ("Gmail indica que este destinatario ya fue contactado anteriormente", now, int(message_id)),
+                )
+            return get_outreach(message_id, db_path)
+
     send_fn = sender or _send_smtp
     now = utc_now()
     try:
@@ -211,4 +228,6 @@ def send_outreach(message_id, db_path=None, sender=None):
             "UPDATE outreach_messages SET status='SENT',sent_at=?,provider_message_id=?,last_error=NULL,updated_at=? WHERE id=?",
             (now, str(provider_id or "sent"), now, int(message_id)),
         )
+    from .followup import schedule_followup
+    schedule_followup(message_id, db_path=db_path)
     return get_outreach(message_id, db_path)

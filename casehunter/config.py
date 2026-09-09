@@ -30,6 +30,10 @@ AUTO_INDEX_PAGES = max(1, min(10, int(os.getenv("CASE_HUNTER_AUTO_INDEX_PAGES", 
 AUTO_CASES_PER_CYCLE = max(1, min(100, int(os.getenv("CASE_HUNTER_AUTO_CASES_PER_CYCLE", "8"))))
 AUTO_CONTACT_DISCOVERY = os.getenv("CASE_HUNTER_AUTO_CONTACT_DISCOVERY", "1").strip().lower() not in {"0", "false", "no"}
 AUTO_SEND_APPROVED = os.getenv("CASE_HUNTER_AUTO_SEND_APPROVED", "0").strip().lower() in {"1", "true", "yes"}
+AUTO_MONITOR_REPLIES = os.getenv("CASE_HUNTER_AUTO_MONITOR_REPLIES", "1").strip().lower() not in {"0", "false", "no"}
+AUTO_SEND_FOLLOWUPS = os.getenv("CASE_HUNTER_AUTO_SEND_FOLLOWUPS", "0").strip().lower() in {"1", "true", "yes"}
+AUTO_FOLLOWUP_DAYS = max(1, min(30, int(os.getenv("CASE_HUNTER_AUTO_FOLLOWUP_DAYS", "5"))))
+STORE_REPLY_CONTENT = os.getenv("CASE_HUNTER_STORE_REPLY_CONTENT", "0").strip().lower() in {"1", "true", "yes"}
 CONTACT_DISCOVERY_TIMEOUT = max(2, min(30, int(os.getenv("CASE_HUNTER_CONTACT_TIMEOUT", "8"))))
 CONTACT_DISCOVERY_MAX_SITES = max(1, min(5, int(os.getenv("CASE_HUNTER_CONTACT_MAX_SITES", "2"))))
 
@@ -38,3 +42,8 @@ SMTP_PORT = int(os.getenv("CASE_HUNTER_SMTP_PORT", "465"))
 SMTP_USERNAME = os.getenv("CASE_HUNTER_SMTP_USERNAME", "").strip()
 SMTP_PASSWORD = os.getenv("CASE_HUNTER_SMTP_PASSWORD", "").strip()
 SMTP_FROM_NAME = os.getenv("CASE_HUNTER_SMTP_FROM_NAME", "Nicolás Vega").strip()
+
+IMAP_HOST = os.getenv("CASE_HUNTER_IMAP_HOST", "imap.gmail.com").strip()
+IMAP_PORT = int(os.getenv("CASE_HUNTER_IMAP_PORT", "993"))
+IMAP_USERNAME = os.getenv("CASE_HUNTER_IMAP_USERNAME", SMTP_USERNAME).strip()
+IMAP_PASSWORD = os.getenv("CASE_HUNTER_IMAP_PASSWORD", SMTP_PASSWORD).strip()

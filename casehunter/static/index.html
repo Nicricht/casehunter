@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Case Hunter Resolve</title>
+  <title>Case Hunter Auto</title>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
@@ -11,7 +11,7 @@
     <aside class="sidebar">
       <div class="brand">
         <div class="brand-mark">CH</div>
-        <div><strong>Case Hunter</strong><span>Resolve</span></div>
+        <div><strong>Case Hunter</strong><span>Auto</span></div>
       </div>
       <nav id="nav">
         <button data-view="dashboard" class="active">Resumen</button>
@@ -20,7 +20,7 @@
         <button data-view="scan">Descubrir</button>
         <button data-view="auto">Auto</button>
       </nav>
-      <div class="sidebar-foot">MVP operativo · fuentes públicas</div>
+      <div class="sidebar-foot">Detección · contacto · respuesta · seguimiento</div>
     </aside>
 
     <main class="main">
@@ -105,8 +105,12 @@
         <div class="metrics" id="auto-metrics"></div>
         <div class="grid two">
           <article class="card">
-            <div class="card-head"><div><h2>Case Hunter Auto</h2><p class="muted">Escanea, prioriza, busca contactos públicos y prepara el primer correo.</p></div><button id="auto-run">Ejecutar ahora</button></div>
+            <div class="card-head"><div><h2>Case Hunter Auto</h2><p class="muted">Escanea, prioriza, busca contactos, prepara correo, monitorea respuestas y programa seguimiento.</p></div><button id="auto-run">Ejecutar ahora</button></div>
             <div id="auto-status" class="notice"></div>
+            <div class="toolbar" style="margin-top:12px">
+              <button id="mail-sync" class="secondary">Sincronizar Gmail</button>
+              <button id="followups-process" class="secondary">Procesar seguimientos</button>
+            </div>
           </article>
           <article class="card">
             <h2>Últimos ciclos</h2>
@@ -117,6 +121,16 @@
           <div class="card-head"><h2>Cola de prospección</h2><button id="auto-refresh" class="secondary">Actualizar</button></div>
           <div id="outreach-queue"></div>
         </article>
+        <div class="grid two" style="margin-top:18px">
+          <article class="card">
+            <h2>Respuestas clasificadas</h2>
+            <div id="reply-list"></div>
+          </article>
+          <article class="card">
+            <h2>Seguimientos</h2>
+            <div id="followup-list"></div>
+          </article>
+        </div>
       </section>
 
       <section id="view-detail" class="view">

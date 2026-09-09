@@ -3,13 +3,16 @@ import time
 
 from .config import (
     AUTO_CASES_PER_CYCLE, AUTO_CONTACT_DISCOVERY, AUTO_ENRICH_LIMIT, AUTO_INDEX_PAGES,
-    AUTO_INTERVAL_MINUTES, AUTO_MAX_PAGES, AUTO_MIN_PRIORITY, AUTO_SEND_APPROVED,
-    AUTO_SOURCE_URLS, AUTO_SUBJECTS_PER_CYCLE,
+    AUTO_INTERVAL_MINUTES, AUTO_MAX_PAGES, AUTO_MIN_PRIORITY, AUTO_MONITOR_REPLIES,
+    AUTO_SEND_APPROVED, AUTO_SEND_FOLLOWUPS, AUTO_SOURCE_URLS, AUTO_SUBJECTS_PER_CYCLE,
 )
 from .contact_discovery import discover_contacts_for_case, quarantine_unsafe_contacts
 from .discovery.source_index import expand_year_index, is_year_index
 from .database import row_to_dict, transaction, utc_now
-from .outreach import ensure_outreach_draft, list_outreach, send_outreach
+from .followup import process_due_followups
+from .gmail_service import imap_configured
+from .outreach import ensure_outreach_draft, list_outreach, send_outreach, smtp_configured
+from .reply_monitor import sync_replies
 from .repository import get_case
 from .scanner_service import run_ley_lobby_scan
 
@@ -81,6 +84,9 @@ def auto_status(db_path=None):
     counts = {}
     for item in queue:
         counts[item["status"]] = counts.get(item["status"], 0) + 1
+    with transaction(db_path) as conn:
+        reply_count = conn.execute("SELECT COUNT(*) n FROM outreach_replies").fetchone()["n"]
+        followup_due = conn.execute("SELECT COUNT(*) n FROM followups WHERE status IN ('DUE','READY')").fetchone()["n"]
     return {
         "last_run": runs[0] if runs else None,
         "queue_counts": counts,
@@ -89,6 +95,12 @@ def auto_status(db_path=None):
         "interval_minutes": AUTO_INTERVAL_MINUTES,
         "contact_discovery": AUTO_CONTACT_DISCOVERY,
         "send_approved_automatically": AUTO_SEND_APPROVED,
+        "smtp_configured": smtp_configured(),
+        "gmail_monitoring_configured": imap_configured(),
+        "monitor_replies": AUTO_MONITOR_REPLIES,
+        "send_followups_automatically": AUTO_SEND_FOLLOWUPS,
+        "reply_count": reply_count,
+        "followups_due": followup_due,
     }
 
 
@@ -100,12 +112,18 @@ def run_auto_cycle(source_urls=None, min_priority=None, max_pages=None, enrich_l
     pages = AUTO_MAX_PAGES if max_pages is None else max(1, min(50, int(max_pages)))
     enrich = AUTO_ENRICH_LIMIT if enrich_limit is None else max(0, min(100, int(enrich_limit)))
     do_contacts = AUTO_CONTACT_DISCOVERY if discover_contacts is None else bool(discover_contacts)
-    do_send = AUTO_SEND_APPROVED if send_approved is None else bool(send_approved)
+    requested_send = AUTO_SEND_APPROVED if send_approved is None else bool(send_approved)
+    do_send = bool(requested_send and smtp_configured())
     metrics = {"scans_started": 0, "cases_created": 0, "cases_updated": 0, "contacts_found": 0, "drafts_created": 0, "messages_sent": 0}
     run_id = _start_run(urls, db_path)
     touched = []
+    reply_sync = {"configured": False, "checked": 0, "created": 0, "classifications": {}}
+    followups = {"due": 0, "sent": 0, "failed": 0, "automatic_send": False}
     try:
         quarantine_unsafe_contacts(db_path)
+
+        if AUTO_MONITOR_REPLIES:
+            reply_sync = sync_replies(db_path)
 
         for source_url in urls:
             scan_urls = _expand_auto_source(source_url, db_path)
@@ -138,10 +156,21 @@ def run_auto_cycle(source_urls=None, min_priority=None, max_pages=None, enrich_l
 
         if do_send:
             for message in list_outreach(status="APPROVED", db_path=db_path):
-                send_outreach(message["id"], db_path)
-                metrics["messages_sent"] += 1
+                sent = send_outreach(message["id"], db_path)
+                if sent.get("status") == "SENT":
+                    metrics["messages_sent"] += 1
+
+        followups = process_due_followups(db_path=db_path)
         _finish_run(run_id, metrics, db_path=db_path)
-        return {"run_id": run_id, **metrics, "queue": list_outreach(db_path=db_path)}
+        return {
+            "run_id": run_id,
+            **metrics,
+            "email_send_requested": requested_send,
+            "email_send_active": do_send,
+            "reply_sync": reply_sync,
+            "followups": followups,
+            "queue": list_outreach(db_path=db_path),
+        }
     except Exception as exc:
         _finish_run(run_id, metrics, error=str(exc), db_path=db_path)
         raise

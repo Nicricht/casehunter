@@ -4,23 +4,21 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '17 */6 * * *'
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/case-hunter-auto.yml'
-      - 'casehunter/**'
-      - 'requirements.txt'
 
 concurrency:
-  group: case-hunter-auto-cloud-v2
+  group: case-hunter-auto-cloud-v3
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 env:
-  CASE_HUNTER_AUTO_SEND_APPROVED: '0'
+  CASE_HUNTER_AUTO_SEND_APPROVED: '1'
   CASE_HUNTER_AUTO_CONTACT_DISCOVERY: '1'
+  CASE_HUNTER_AUTO_MONITOR_REPLIES: '1'
+  CASE_HUNTER_AUTO_SEND_FOLLOWUPS: '1'
+  CASE_HUNTER_AUTO_FOLLOWUP_DAYS: '5'
+  CASE_HUNTER_STORE_REPLY_CONTENT: '0'
   CASE_HUNTER_AUTO_MIN_PRIORITY: '20'
   CASE_HUNTER_AUTO_MAX_PAGES: '5'
   CASE_HUNTER_AUTO_ENRICH_LIMIT: '15'
@@ -31,6 +29,10 @@ env:
   CASE_HUNTER_CONTACT_MAX_SITES: '2'
   CASE_HUNTER_AUTO_INTERVAL_MINUTES: '360'
   CASE_HUNTER_DATA_DIR: ${{ github.workspace }}/data
+  CASE_HUNTER_SMTP_USERNAME: ${{ secrets.CASE_HUNTER_GMAIL_USERNAME }}
+  CASE_HUNTER_SMTP_PASSWORD: ${{ secrets.CASE_HUNTER_GMAIL_APP_PASSWORD }}
+  CASE_HUNTER_IMAP_USERNAME: ${{ secrets.CASE_HUNTER_GMAIL_USERNAME }}
+  CASE_HUNTER_IMAP_PASSWORD: ${{ secrets.CASE_HUNTER_GMAIL_APP_PASSWORD }}
 
 jobs:
   hunt:
@@ -51,8 +53,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: data
-          key: case-hunter-state-v2-${{ github.run_id }}
+          key: case-hunter-state-v3-${{ github.run_id }}
           restore-keys: |
+            case-hunter-state-v3-
             case-hunter-state-v2-
 
       - name: Install dependencies
@@ -63,7 +66,7 @@ jobs:
       - name: Verify Case Hunter before hunting
         run: python -m casehunter verify
 
-      - name: Run automatic hunting cycle
+      - name: Run automatic hunting and follow-up cycle
         run: |
           mkdir -p data
           python -m casehunter auto | tee data/last-auto-run.json
@@ -92,12 +95,17 @@ jobs:
                   print(f"**Cases updated:** {last['cases_updated']}  ")
                   print(f"**Contacts found:** {last['contacts_found']}  ")
                   print(f"**Drafts created:** {last['drafts_created']}  ")
+                  print(f"**Messages sent:** {last['messages_sent']}  ")
                   if last['error']:
                       print(f"**Error:** {last['error']}  ")
+              replies = conn.execute('SELECT COUNT(*) n FROM outreach_replies').fetchone()['n']
+              due = conn.execute("SELECT COUNT(*) n FROM followups WHERE status='DUE'").fetchone()['n']
+              print(f"**Replies classified:** {replies}  ")
+              print(f"**Follow-ups due:** {due}  ")
               print('')
               print('## Top approval queue')
               rows = conn.execute('''
-                  SELECT o.status, o.recipient_email, o.subject,
+                  SELECT o.status, o.recipient_email,
                          c.detected_company_name, c.contract_ref, c.financial_priority
                   FROM outreach_messages o
                   JOIN cases c ON c.id=o.case_id
@@ -113,19 +121,17 @@ jobs:
                   for row in rows:
                       company = (row['detected_company_name'] or '').replace('|', '/')
                       contract = (row['contract_ref'] or '').replace('|', '/')
-                      email = row['recipient_email'] or 'pending'
-                      print(f"| {row['financial_priority']} | {company} | {contract} | {row['status']} | {email} |")
+                      contact = row['recipient_email'] or 'pending'
+                      print(f"| {row['financial_priority']} | {company} | {contract} | {row['status']} | {contact} |")
           finally:
               conn.close()
           PY
 
-      - name: Upload Case Hunter cloud state
+      - name: Upload run summary
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: case-hunter-cloud-state-${{ github.run_number }}
-          path: |
-            data/case_hunter.db
-            data/last-auto-run.json
+          name: case-hunter-run-summary-${{ github.run_number }}
+          path: data/last-auto-run.json
           if-no-files-found: warn
-          retention-days: 30
+          retention-days: 14

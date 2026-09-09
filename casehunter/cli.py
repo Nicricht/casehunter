@@ -9,6 +9,8 @@ from .config import DEFAULT_LEY_LOBBY_URL
 from .database import init_db
 from .scanner_service import run_ley_lobby_scan
 from .auto_service import run_auto_cycle, run_daemon
+from .followup import process_due_followups
+from .reply_monitor import sync_replies
 
 
 def run_tests():
@@ -31,6 +33,11 @@ def main(argv=None):
     auto = sub.add_parser("auto", help="Ejecuta Case Hunter Auto")
     auto.add_argument("--daemon", action="store_true", help="Mantiene ciclos automáticos en ejecución")
     auto.add_argument("--interval-minutes", type=int, default=None)
+
+    sub.add_parser("mail-sync", help="Lee Gmail/IMAP, clasifica respuestas y actualiza casos")
+
+    followups = sub.add_parser("followups", help="Procesa seguimientos vencidos")
+    followups.add_argument("--send", action="store_true", help="Envía seguimientos vencidos si Gmail/SMTP está configurado")
 
     scan = sub.add_parser("scan", help="Ejecuta un escaneo de Ley del Lobby")
     scan.add_argument("url", nargs="?", default=DEFAULT_LEY_LOBBY_URL)
@@ -55,7 +62,15 @@ def main(argv=None):
             run_daemon(args.interval_minutes)
             return 0
         result = run_auto_cycle()
-        print(json.dumps({k:v for k,v in result.items() if k != "queue"}, ensure_ascii=False, indent=2))
+        print(json.dumps({k: v for k, v in result.items() if k != "queue"}, ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "mail-sync":
+        init_db()
+        print(json.dumps(sync_replies(), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "followups":
+        init_db()
+        print(json.dumps(process_due_followups(send=args.send), ensure_ascii=False, indent=2))
         return 0
     if args.command == "scan":
         init_db()

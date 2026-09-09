@@ -106,7 +106,6 @@ CREATE TABLE IF NOT EXISTS scans (
     error TEXT
 );
 
-
 CREATE TABLE IF NOT EXISTS contacts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     case_id INTEGER NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
@@ -137,6 +136,37 @@ CREATE TABLE IF NOT EXISTS outreach_messages (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS outreach_replies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    outreach_id INTEGER NOT NULL REFERENCES outreach_messages(id) ON DELETE CASCADE,
+    case_id INTEGER NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+    provider_message_id TEXT NOT NULL UNIQUE,
+    in_reply_to TEXT,
+    sender_email TEXT,
+    subject TEXT,
+    body TEXT,
+    classification TEXT NOT NULL,
+    received_at TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS followups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    outreach_id INTEGER NOT NULL REFERENCES outreach_messages(id) ON DELETE CASCADE,
+    case_id INTEGER NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'PENDING',
+    due_at TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    sent_at TEXT,
+    provider_message_id TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(outreach_id, sequence)
+);
+
 CREATE TABLE IF NOT EXISTS automation_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     started_at TEXT NOT NULL,
@@ -162,8 +192,11 @@ CREATE TABLE IF NOT EXISTS automation_source_state (
 CREATE INDEX IF NOT EXISTS idx_contacts_case ON contacts(case_id);
 CREATE INDEX IF NOT EXISTS idx_outreach_status ON outreach_messages(status);
 CREATE INDEX IF NOT EXISTS idx_outreach_case ON outreach_messages(case_id);
+CREATE INDEX IF NOT EXISTS idx_replies_case ON outreach_replies(case_id);
+CREATE INDEX IF NOT EXISTS idx_replies_outreach ON outreach_replies(outreach_id);
+CREATE INDEX IF NOT EXISTS idx_followups_status_due ON followups(status, due_at);
+CREATE INDEX IF NOT EXISTS idx_followups_outreach ON followups(outreach_id);
 CREATE INDEX IF NOT EXISTS idx_automation_started ON automation_runs(started_at);
-
 CREATE INDEX IF NOT EXISTS idx_cases_status ON cases(status);
 CREATE INDEX IF NOT EXISTS idx_cases_company ON cases(company_id);
 CREATE INDEX IF NOT EXISTS idx_cases_event_date ON cases(event_date);

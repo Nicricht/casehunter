@@ -31,7 +31,10 @@ from .schemas import (ActionCreate, ActionUpdate, AutoRunRequest, BlockerUpdate,
 from .resolution_playbook import list_playbooks
 from .auto_service import auto_status, list_auto_runs, run_auto_cycle
 from .contact_discovery import list_contacts
+from .followup import list_followups, process_due_followups
+from .gmail_service import imap_configured
 from .outreach import approve_outreach, attach_recipient, list_outreach, reject_outreach, send_outreach, smtp_configured
+from .reply_monitor import list_replies, sync_replies
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -83,7 +86,12 @@ def create_app(db_path=None, auth_username=None, auth_password=None):
     @app.get("/api/config")
     def config():
         from .mercado_publico import configured as mercado_publico_configured
-        return {"default_ley_lobby_url": DEFAULT_LEY_LOBBY_URL, "mercado_publico_configured": mercado_publico_configured(), "smtp_configured": smtp_configured()}
+        return {
+            "default_ley_lobby_url": DEFAULT_LEY_LOBBY_URL,
+            "mercado_publico_configured": mercado_publico_configured(),
+            "smtp_configured": smtp_configured(),
+            "imap_configured": imap_configured(),
+        }
 
     @app.get("/api/dashboard")
     def get_dashboard():
@@ -267,6 +275,28 @@ def create_app(db_path=None, auth_username=None, auth_password=None):
             return reject_outreach(message_id, app.state.db_path)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/replies")
+    def get_replies(case_id: int | None = None, classification: str | None = None, limit: int = 100):
+        return list_replies(case_id=case_id, classification=classification, limit=limit, db_path=app.state.db_path)
+
+    @app.post("/api/mail/sync")
+    def post_mail_sync():
+        try:
+            return sync_replies(app.state.db_path)
+        except (RuntimeError, OSError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get("/api/followups")
+    def get_followups(status: str | None = None, limit: int = 100):
+        return list_followups(status=status, limit=limit, db_path=app.state.db_path)
+
+    @app.post("/api/followups/process")
+    def post_followups_process(send: bool = False):
+        try:
+            return process_due_followups(db_path=app.state.db_path, send=send)
+        except (RuntimeError, OSError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     return app
 
