@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Case Hunter Resolve</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">CH</div>
+        <div><strong>Case Hunter</strong><span>Resolve</span></div>
+      </div>
+      <nav id="nav">
+        <button data-view="dashboard" class="active">Resumen</button>
+        <button data-view="cases">Casos</button>
+        <button data-view="companies">Empresas</button>
+        <button data-view="scan">Descubrir</button>
+        <button data-view="auto">Auto</button>
+      </nav>
+      <div class="sidebar-foot">MVP operativo · fuentes públicas</div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h1 id="page-title">Resumen</h1>
+          <p id="page-subtitle">Contratos detectados, bloqueos y próximas acciones.</p>
+        </div>
+        <div id="health" class="health">Comprobando sistema…</div>
+      </header>
+
+      <section id="view-dashboard" class="view active">
+        <div id="metrics" class="metrics"></div>
+        <div class="grid two">
+          <article class="card">
+            <div class="card-head"><h2>Casos prioritarios</h2><button class="link-button" data-view-link="cases">Ver todos</button></div>
+            <div id="priority-cases"></div>
+          </article>
+          <article class="card">
+            <div class="card-head"><h2>Bloqueos activos</h2></div>
+            <div id="blockers"></div>
+          </article>
+        </div>
+      </section>
+
+      <section id="view-cases" class="view">
+        <article class="card">
+          <div class="toolbar">
+            <input id="case-search" placeholder="Buscar empresa, SAFI o identificador">
+            <select id="case-status">
+              <option value="">Todos los estados</option>
+              <option>DETECTED</option><option>VALIDATING</option><option>BLOCKER_IDENTIFIED</option>
+              <option>ACTION_REQUIRED</option><option>DOCUMENT_SENT</option><option>WAITING_AGENCY</option>
+              <option>FOLLOW_UP</option><option>RESOLVED</option><option>DISMISSED</option>
+            </select>
+            <button id="refresh-cases">Actualizar</button>
+          </div>
+          <div id="cases-table"></div>
+        </article>
+      </section>
+
+      <section id="view-companies" class="view">
+        <div class="grid two">
+          <article class="card">
+            <h2>Registrar empresa</h2>
+            <form id="company-form" class="stack">
+              <label>Nombre<input id="company-name" required minlength="2" placeholder="Constructora Ejemplo SpA"></label>
+              <label>RUT<input id="company-rut" placeholder="76.123.456-7"></label>
+              <button type="submit">Guardar empresa</button>
+            </form>
+          </article>
+          <article class="card">
+            <h2>Empresas</h2>
+            <div id="companies-list"></div>
+          </article>
+        </div>
+      </section>
+
+      <section id="view-scan" class="view">
+        <div class="grid two">
+          <article class="card">
+            <h2>Descubrir casos públicos</h2>
+            <p class="muted">Escanea audiencias de Ley del Lobby, detecta señales y crea casos de trabajo.</p>
+            <form id="scan-form" class="stack">
+              <label>URL pública<textarea id="scan-url" rows="4" required></textarea></label>
+              <div class="grid compact">
+                <label>Páginas máximas<input id="scan-pages" type="number" min="1" max="50" value="10"></label>
+                <label>Detalles máximos<input id="scan-enrich" type="number" min="0" max="100" value="25"></label>
+              </div>
+              <button type="submit" id="scan-button">Iniciar escaneo</button>
+            </form>
+            <div id="scan-result" class="notice hidden"></div>
+          </article>
+          <article class="card">
+            <h2>Historial de escaneos</h2>
+            <div id="scan-history"></div>
+          </article>
+        </div>
+      </section>
+
+      <section id="view-auto" class="view">
+        <div class="metrics" id="auto-metrics"></div>
+        <div class="grid two">
+          <article class="card">
+            <div class="card-head"><div><h2>Case Hunter Auto</h2><p class="muted">Escanea, prioriza, busca contactos públicos y prepara el primer correo.</p></div><button id="auto-run">Ejecutar ahora</button></div>
+            <div id="auto-status" class="notice"></div>
+          </article>
+          <article class="card">
+            <h2>Últimos ciclos</h2>
+            <div id="auto-runs"></div>
+          </article>
+        </div>
+        <article class="card" style="margin-top:18px">
+          <div class="card-head"><h2>Cola de prospección</h2><button id="auto-refresh" class="secondary">Actualizar</button></div>
+          <div id="outreach-queue"></div>
+        </article>
+      </section>
+
+      <section id="view-detail" class="view">
+        <div class="detail-head">
+          <button id="back-cases" class="secondary">← Volver</button>
+          <div id="detail-title"></div>
+        </div>
+        <div id="case-detail"></div>
+      </section>
+    </main>
+  </div>
+  <div id="toast" class="toast hidden"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
