@@ -6,7 +6,7 @@ from .config import (
     AUTO_INTERVAL_MINUTES, AUTO_MAX_PAGES, AUTO_MIN_PRIORITY, AUTO_SEND_APPROVED,
     AUTO_SOURCE_URLS, AUTO_SUBJECTS_PER_CYCLE,
 )
-from .contact_discovery import discover_contacts_for_case
+from .contact_discovery import discover_contacts_for_case, quarantine_unsafe_contacts
 from .discovery.source_index import expand_year_index, is_year_index
 from .database import row_to_dict, transaction, utc_now
 from .outreach import ensure_outreach_draft, list_outreach, send_outreach
@@ -105,6 +105,8 @@ def run_auto_cycle(source_urls=None, min_priority=None, max_pages=None, enrich_l
     run_id = _start_run(urls, db_path)
     touched = []
     try:
+        quarantine_unsafe_contacts(db_path)
+
         for source_url in urls:
             scan_urls = _expand_auto_source(source_url, db_path)
             for url in scan_urls:
@@ -126,9 +128,10 @@ def run_auto_cycle(source_urls=None, min_priority=None, max_pages=None, enrich_l
             contacts = []
             if do_contacts:
                 contact_result = discover_contacts_for_case(case_id, db_path, search_web=True)
-                contacts = contact_result["contacts"]
+                contacts = [item for item in contact_result["contacts"] if item.get("status") != "REJECTED"]
                 metrics["contacts_found"] += contact_result["created"]
-            best = contacts[0] if contacts else None
+            high_confidence = [item for item in contacts if item.get("confidence_label") == "HIGH"]
+            best = high_confidence[0] if high_confidence else None
             draft = ensure_outreach_draft(case_id, best["email"] if best else None, best["id"] if best else None, db_path)
             if draft["created"]:
                 metrics["drafts_created"] += 1
