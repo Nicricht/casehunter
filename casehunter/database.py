@@ -4,7 +4,8 @@ from pathlib import Path
 import json
 import sqlite3
 
-from .config import DATABASE_PATH
+from .config import DATABASE_PATH, DATABASE_URL
+from .db_backends import connect_postgres, is_postgres_target
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -220,8 +221,22 @@ def utc_now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def _database_target(path=None):
+    if path is not None:
+        return path
+    return DATABASE_URL or DATABASE_PATH
+
+
+def backend_name(path=None):
+    return "postgresql" if is_postgres_target(_database_target(path)) else "sqlite"
+
+
 def connect(path=None):
-    db_path = Path(path or DATABASE_PATH)
+    target = _database_target(path)
+    if is_postgres_target(target):
+        return connect_postgres(str(target))
+
+    db_path = Path(target)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(db_path)
     connection.row_factory = sqlite3.Row
@@ -264,5 +279,5 @@ def json_loads(value, default=None):
         return default
     try:
         return json.loads(value)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError):
         return default
