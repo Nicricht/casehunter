@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS scans (
     error TEXT
 );
 
+
 CREATE TABLE IF NOT EXISTS contacts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     case_id INTEGER NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
@@ -162,6 +163,7 @@ CREATE INDEX IF NOT EXISTS idx_contacts_case ON contacts(case_id);
 CREATE INDEX IF NOT EXISTS idx_outreach_status ON outreach_messages(status);
 CREATE INDEX IF NOT EXISTS idx_outreach_case ON outreach_messages(case_id);
 CREATE INDEX IF NOT EXISTS idx_automation_started ON automation_runs(started_at);
+
 CREATE INDEX IF NOT EXISTS idx_cases_status ON cases(status);
 CREATE INDEX IF NOT EXISTS idx_cases_company ON cases(company_id);
 CREATE INDEX IF NOT EXISTS idx_cases_event_date ON cases(event_date);

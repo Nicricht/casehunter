@@ -104,6 +104,7 @@ def _pagination_urls(html: str, base_url: str):
             continue
         page = parse_qs(parsed.query).get("page")
         if page and page[0].isdigit():
+            # Page 1 is the canonical base URL and must not be fetched twice.
             if int(page[0]) == 1:
                 continue
             found.append(link)

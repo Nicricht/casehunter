@@ -65,6 +65,7 @@ def extract_amounts_clp(text: str):
             if amount and amount not in amounts:
                 amounts.append(amount)
 
+    # Common public-sector wording such as "1.700 millones".
     for raw in MILLIONS_PATTERN.findall(text):
         normalized = raw.replace(".", "").replace(",", ".")
         try:
