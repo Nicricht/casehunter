@@ -36,10 +36,6 @@ env:
   CASE_HUNTER_CONTACT_MAX_SITES: '2'
   CASE_HUNTER_AUTO_INTERVAL_MINUTES: '360'
   CASE_HUNTER_DATA_DIR: ${{ github.workspace }}/data
-  CASE_HUNTER_SMTP_USERNAME: ${{ secrets.CASE_HUNTER_GMAIL_USERNAME }}
-  CASE_HUNTER_SMTP_PASSWORD: ${{ secrets.CASE_HUNTER_GMAIL_APP_PASSWORD }}
-  CASE_HUNTER_IMAP_USERNAME: ${{ secrets.CASE_HUNTER_GMAIL_USERNAME }}
-  CASE_HUNTER_IMAP_PASSWORD: ${{ secrets.CASE_HUNTER_GMAIL_APP_PASSWORD }}
 
 jobs:
   hunt:
@@ -74,6 +70,11 @@ jobs:
         run: python -m casehunter verify
 
       - name: Run automatic hunting and follow-up cycle
+        env:
+          CASE_HUNTER_SMTP_USERNAME: ${{ secrets.CASE_HUNTER_GMAIL_USERNAME }}
+          CASE_HUNTER_SMTP_PASSWORD: ${{ secrets.CASE_HUNTER_GMAIL_APP_PASSWORD }}
+          CASE_HUNTER_IMAP_USERNAME: ${{ secrets.CASE_HUNTER_GMAIL_USERNAME }}
+          CASE_HUNTER_IMAP_PASSWORD: ${{ secrets.CASE_HUNTER_GMAIL_APP_PASSWORD }}
         run: |
           mkdir -p data
           python -m casehunter auto | tee data/last-auto-run.json
