@@ -6,6 +6,7 @@ from unittest.mock import patch
 from casehunter.auto_service import run_auto_cycle
 from casehunter.contact_discovery import (
     extract_emails,
+    is_verified_corporate_contact,
     quarantine_unsafe_contacts,
     search_company_websites,
 )
@@ -45,6 +46,34 @@ class ContactDiscoverySafetyTests(unittest.TestCase):
     def test_duckduckgo_email_is_rejected(self):
         emails = extract_emails("Contacto real contacto@empresa.cl y soporte dmca@duckduckgo.com")
         self.assertEqual(emails, ["contacto@empresa.cl"])
+
+    def test_verified_corporate_contact_requires_official_matching_domain(self):
+        self.assertTrue(
+            is_verified_corporate_contact(
+                "contacto@valko.cl",
+                "https://www.valko.cl/contacto",
+                "HIGH",
+                "Constructora Valko S.A.",
+            )
+        )
+        self.assertFalse(
+            is_verified_corporate_contact(
+                "contacto@otraempresa.cl",
+                "https://www.otraempresa.cl/contacto",
+                "HIGH",
+                "Constructora Valko S.A.",
+            )
+        )
+
+    def test_verified_corporate_contact_rejects_medium_confidence(self):
+        self.assertFalse(
+            is_verified_corporate_contact(
+                "contacto@rincor.cl",
+                "https://rincor.cl/contacto",
+                "MEDIUM",
+                "Constructora Rincor SpA",
+            )
+        )
 
     @patch("casehunter.contact_discovery._fetch_text")
     def test_search_results_do_not_return_duckduckgo_as_company_site(self, mocked):
