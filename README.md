@@ -1,5 +1,7 @@
 # Case Hunter Resolve v2.2.0
 
+**Repositorio oficial:** `Nicricht/casehunter`
+
 Sistema para detectar y gestionar casos administrativos de proveedores del Estado a partir de fuentes públicas y seguimiento interno.
 
 ## Qué resuelve
@@ -111,11 +113,11 @@ La interfaz web incluye una vista **Auto** con la cola de prospección. Cuando S
 
 ### Ejecución cloud sin PC
 
-Case Hunter Auto también queda desplegado mediante GitHub Actions. El workflow se encuentra en la rama por defecto del repositorio como `.github/workflows/case-hunter-auto.yml` y ejecuta un ciclo aproximadamente cada 6 horas.
+Case Hunter Auto se ejecuta mediante GitHub Actions desde el repositorio oficial. El workflow está en `.github/workflows/case-hunter-auto.yml` y ejecuta un ciclo aproximadamente cada 6 horas.
 
 El runner cloud:
 
-- hace checkout de la rama `case-hunter-resolve`;
+- hace checkout de `Nicricht/casehunter` en la rama `main`;
 - restaura la base SQLite del ciclo anterior mediante cache de GitHub Actions;
 - ejecuta el escaneo y la priorización;
 - busca contactos públicos para un número limitado de los casos más prioritarios;
