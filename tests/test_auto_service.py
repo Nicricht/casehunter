@@ -34,8 +34,16 @@ class AutoServiceTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.db = Path(self.tmp.name) / "test.db"
         init_db(self.db)
+        # Unit tests must never consult the operator's real Gmail account,
+        # even when CI happens to expose production credentials.
+        self.monitor_patcher = patch("casehunter.auto_service.AUTO_MONITOR_REPLIES", False)
+        self.imap_patcher = patch("casehunter.gmail_service.imap_configured", return_value=False)
+        self.monitor_patcher.start()
+        self.imap_patcher.start()
 
     def tearDown(self):
+        self.imap_patcher.stop()
+        self.monitor_patcher.stop()
         self.tmp.cleanup()
 
     def test_cycle_creates_approval_draft_when_policy_is_off(self):
