@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from casehunter.auto_service import run_auto_cycle
 from casehunter.contact_discovery import (
+    contact_assessment,
     extract_emails,
     is_verified_corporate_contact,
     quarantine_unsafe_contacts,
@@ -47,7 +48,7 @@ class ContactDiscoverySafetyTests(unittest.TestCase):
         emails = extract_emails("Contacto real contacto@empresa.cl y soporte dmca@duckduckgo.com")
         self.assertEqual(emails, ["contacto@empresa.cl"])
 
-    def test_verified_corporate_contact_requires_official_matching_domain(self):
+    def test_verified_corporate_contact_accepts_matching_company_site(self):
         self.assertTrue(
             is_verified_corporate_contact(
                 "contacto@valko.cl",
@@ -65,13 +66,32 @@ class ContactDiscoverySafetyTests(unittest.TestCase):
             )
         )
 
-    def test_verified_corporate_contact_rejects_medium_confidence(self):
+    def test_external_gmail_can_be_verified_when_company_publishes_it(self):
+        assessment = contact_assessment(
+            "prevcons@gmail.com",
+            "https://prevcons.cl/contacto",
+            "MEDIUM",
+            "PREVCONS SpA",
+        )
+        self.assertIsNotNone(assessment)
+        self.assertGreaterEqual(assessment.score, 70)
+        self.assertEqual(assessment.decision, "AUTO_SEND")
+        self.assertTrue(
+            is_verified_corporate_contact(
+                "prevcons@gmail.com",
+                "https://prevcons.cl/contacto",
+                "MEDIUM",
+                "PREVCONS SpA",
+            )
+        )
+
+    def test_external_email_from_unrelated_site_is_not_verified(self):
         self.assertFalse(
             is_verified_corporate_contact(
-                "contacto@rincor.cl",
-                "https://rincor.cl/contacto",
-                "MEDIUM",
-                "Constructora Rincor SpA",
+                "prevcons@gmail.com",
+                "https://directorio-random.example/contacto",
+                "HIGH",
+                "PREVCONS SpA",
             )
         )
 
@@ -118,12 +138,12 @@ class ContactDiscoverySafetyTests(unittest.TestCase):
             row = conn.execute("SELECT status FROM contacts WHERE case_id=?", (case_id,)).fetchone()
         self.assertEqual(row["status"], "REJECTED")
 
-    def test_medium_contact_stays_needs_contact_in_auto_cycle(self):
+    def test_medium_unrelated_contact_stays_needs_contact_in_auto_cycle(self):
         imported = import_candidate(candidate("CONTACT-SAFETY-2"), db_path=self.db)
         fake_scan = {"import": {"created": 0, "updated": 1, "case_ids": [imported["case"]["id"]]}}
         fake_contacts = {
             "created": 1,
-            "contacts": [{"id": 1, "email": "empresa.segura@gmail.com", "confidence_label": "MEDIUM", "status": "DISCOVERED"}],
+            "contacts": [{"id": 1, "email": "empresa.segura@gmail.com", "source_url": "https://otro.example/contacto", "confidence_label": "MEDIUM", "status": "DISCOVERED"}],
         }
         with patch("casehunter.auto_service.run_ley_lobby_scan", return_value=fake_scan), patch(
             "casehunter.auto_service.discover_contacts_for_case", return_value=fake_contacts
