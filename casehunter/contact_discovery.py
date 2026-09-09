@@ -6,7 +6,7 @@ from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 from .config import CONTACT_DISCOVERY_MAX_SITES, CONTACT_DISCOVERY_TIMEOUT
-from .database import row_to_dict, transaction, utc_now
+from .database import json_dumps, json_loads, row_to_dict, transaction, utc_now
 from .engines.contact_trust import assess_contact
 from .repository import get_case
 
@@ -113,7 +113,7 @@ def is_verified_corporate_contact(email, source_url, confidence_label, company_n
 
 def _fetch_text(url, timeout=None, limit=2_000_000):
     timeout = CONTACT_DISCOVERY_TIMEOUT if timeout is None else max(2, int(timeout))
-    req = Request(url, headers={"User-Agent": "CaseHunterResolve/2.5 (+public-contact-discovery)", "Accept": "text/html,text/plain;q=0.9,*/*;q=0.5"})
+    req = Request(url, headers={"User-Agent": "CaseHunterResolve/3.0 (+public-contact-discovery)", "Accept": "text/html,text/plain;q=0.9,*/*;q=0.5"})
     try:
         with urlopen(req, timeout=timeout) as response:
             content_type = (response.headers.get("Content-Type") or "").lower()
@@ -275,40 +275,75 @@ def quarantine_unsafe_contacts(db_path=None):
 
 def save_contacts(case_id, contacts, db_path=None):
     case = get_case(case_id, db_path)
+    company_name = case.get("company_name") or case.get("detected_company_name") or ""
     now = utc_now()
     created = 0
     with transaction(db_path) as conn:
         for item in contacts:
             email = item["email"].strip().lower()
             source_url = item.get("source_url")
+            confidence = item.get("confidence_label", "LOW")
             if not is_allowed_contact_email(email) or not is_allowed_contact_source(source_url):
                 continue
             existing = conn.execute("SELECT id FROM contacts WHERE case_id=? AND email=?", (int(case_id), email)).fetchone()
             if existing:
+                contact_id = int(existing["id"])
                 conn.execute(
                     "UPDATE contacts SET source_url=?,confidence_label=?,status='DISCOVERED',updated_at=? WHERE id=?",
-                    (source_url, item.get("confidence_label", "LOW"), now, existing["id"]),
+                    (source_url, confidence, now, contact_id),
                 )
             else:
-                conn.execute(
+                cur = conn.execute(
                     """INSERT INTO contacts(case_id,company_name,email,source_url,confidence_label,status,created_at,updated_at)
                        VALUES(?,?,?,?,?,'DISCOVERED',?,?)""",
-                    (int(case_id), case.get("company_name") or case.get("detected_company_name"), email, source_url, item.get("confidence_label", "LOW"), now, now),
+                    (int(case_id), company_name, email, source_url, confidence, now, now),
                 )
+                contact_id = int(cur.lastrowid)
                 created += 1
+
+            assessment = contact_assessment(email, source_url, confidence, company_name)
+            if assessment:
+                conn.execute(
+                    """INSERT INTO contact_assessments(contact_id,trust_score,decision,reasons,source_host,email_domain,assessed_at)
+                       VALUES(?,?,?,?,?,?,?)
+                       ON CONFLICT(contact_id) DO UPDATE SET
+                         trust_score=excluded.trust_score,
+                         decision=excluded.decision,
+                         reasons=excluded.reasons,
+                         source_host=excluded.source_host,
+                         email_domain=excluded.email_domain,
+                         assessed_at=excluded.assessed_at""",
+                    (
+                        contact_id,
+                        assessment.score,
+                        assessment.decision,
+                        json_dumps(list(assessment.reasons)),
+                        assessment.source_host,
+                        assessment.email_domain,
+                        now,
+                    ),
+                )
     return {"created": created, "contacts": list_contacts(case_id=case_id, db_path=db_path)}
 
 
 def list_contacts(case_id=None, db_path=None):
-    query = "SELECT * FROM contacts"
+    query = """SELECT c.*,a.trust_score,a.decision trust_decision,a.reasons trust_reasons,
+                      a.source_host assessed_source_host,a.email_domain assessed_email_domain,a.assessed_at
+               FROM contacts c
+               LEFT JOIN contact_assessments a ON a.contact_id=c.id"""
     params = []
     if case_id is not None:
-        query += " WHERE case_id=?"
+        query += " WHERE c.case_id=?"
         params.append(int(case_id))
-    query += " ORDER BY CASE status WHEN 'REJECTED' THEN 1 ELSE 0 END, CASE confidence_label WHEN 'HIGH' THEN 0 WHEN 'MEDIUM' THEN 1 ELSE 2 END, id"
+    query += " ORDER BY CASE c.status WHEN 'REJECTED' THEN 1 ELSE 0 END, COALESCE(a.trust_score,0) DESC, CASE c.confidence_label WHEN 'HIGH' THEN 0 WHEN 'MEDIUM' THEN 1 ELSE 2 END, c.id"
     with transaction(db_path) as conn:
         rows = conn.execute(query, params).fetchall()
-    return [row_to_dict(row) for row in rows]
+    result = []
+    for row in rows:
+        item = row_to_dict(row)
+        item["trust_reasons"] = json_loads(item.get("trust_reasons"), [])
+        result.append(item)
+    return result
 
 
 def discover_contacts_for_case(case_id, db_path=None, search_web=True):
