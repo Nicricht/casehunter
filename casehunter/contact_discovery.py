@@ -1,5 +1,6 @@
 import html
 import re
+import unicodedata
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
 from urllib.request import Request, urlopen
@@ -20,12 +21,30 @@ BLOCKED_EMAIL_DOMAINS = {
     "minsegpres.gob.cl", "leylobby.gob.cl", "mop.gov.cl", "mercadopublico.cl",
     "duckduckgo.com",
 }
+GENERIC_COMPANY_TOKENS = {
+    "sa", "spa", "ltda", "eirl", "chile", "empresa", "grupo", "sociedad", "limitada", "compania",
+    "corporacion", "constructora", "construccion", "ingenieria", "ingenieros", "servicios", "proyectos",
+    "obras", "consultora", "consultores", "inversiones", "soluciones", "tecnologia", "tecnologias",
+}
 
 
 def _host_matches(host, blocked):
     host = (host or "").lower().split(":")[0].strip(".")
     blocked = (blocked or "").lower().strip(".")
     return bool(host and blocked and (host == blocked or host.endswith("." + blocked)))
+
+
+def _normalized_tokens(value):
+    normalized = unicodedata.normalize("NFKD", value or "").encode("ascii", "ignore").decode("ascii").lower()
+    return [token for token in re.findall(r"[a-z0-9]+", normalized) if len(token) >= 3 and token not in GENERIC_COMPANY_TOKENS]
+
+
+def _company_domain_matches(company_name, host):
+    tokens = _normalized_tokens(company_name)
+    if not tokens:
+        return False
+    normalized_host = re.sub(r"[^a-z0-9]", "", (host or "").lower())
+    return any(token in normalized_host for token in tokens)
 
 
 def is_blocked_host(host):
@@ -60,9 +79,28 @@ def is_allowed_contact_email(email):
     return True
 
 
+def is_verified_corporate_contact(email, source_url, confidence_label, company_name):
+    """Strict gate for unattended first-contact email.
+
+    The address must be HIGH confidence, published on an allowed web source,
+    use the same domain as that source, and the domain must resemble the
+    company name. A false negative is safer here than emailing the wrong firm.
+    """
+    if (confidence_label or "").upper() != "HIGH":
+        return False
+    if not is_allowed_contact_email(email) or not is_allowed_contact_source(source_url):
+        return False
+    parsed = urlparse(source_url or "")
+    site_host = parsed.netloc.lower().split(":")[0]
+    email_domain = (email or "").strip().lower().partition("@")[2]
+    if not site_host or not email_domain or not _host_matches(site_host, email_domain):
+        return False
+    return _company_domain_matches(company_name, site_host)
+
+
 def _fetch_text(url, timeout=None, limit=2_000_000):
     timeout = CONTACT_DISCOVERY_TIMEOUT if timeout is None else max(2, int(timeout))
-    req = Request(url, headers={"User-Agent": "CaseHunterResolve/2.2 (+public-contact-discovery)", "Accept": "text/html,text/plain;q=0.9,*/*;q=0.5"})
+    req = Request(url, headers={"User-Agent": "CaseHunterResolve/2.4 (+public-contact-discovery)", "Accept": "text/html,text/plain;q=0.9,*/*;q=0.5"})
     try:
         with urlopen(req, timeout=timeout) as response:
             content_type = (response.headers.get("Content-Type") or "").lower()
