@@ -9,11 +9,12 @@ from .config import (
 )
 from .contact_discovery import (
     discover_contacts_for_case,
-    is_verified_corporate_contact,
     quarantine_unsafe_contacts,
+    rank_contacts_for_company,
 )
 from .discovery.source_index import expand_year_index, is_year_index
 from .database import row_to_dict, transaction, utc_now
+from .engines.outreach_policy import evaluate_first_contact
 from .followup import process_due_followups
 from .gmail_service import imap_configured
 from .outreach import approve_outreach, ensure_outreach_draft, list_outreach, send_outreach, smtp_configured
@@ -193,8 +194,10 @@ def run_auto_cycle(source_urls=None, min_priority=None, max_pages=None, enrich_l
                 contact_result = discover_contacts_for_case(case_id, db_path, search_web=True)
                 contacts = [item for item in contact_result["contacts"] if item.get("status") != "REJECTED"]
                 metrics["contacts_found"] += contact_result["created"]
-            high_confidence = [item for item in contacts if item.get("confidence_label") == "HIGH"]
-            best = high_confidence[0] if high_confidence else None
+            company_name = case.get("company_name") or case.get("detected_company_name") or ""
+            ranked = rank_contacts_for_company(contacts, company_name)
+            usable = [item for item in ranked if int(item.get("trust_score") or 0) >= 45]
+            best = usable[0] if usable else None
             draft = ensure_outreach_draft(case_id, best["email"] if best else None, best["id"] if best else None, db_path)
             if draft["created"]:
                 metrics["drafts_created"] += 1
@@ -216,16 +219,22 @@ def run_auto_cycle(source_urls=None, min_priority=None, max_pages=None, enrich_l
                     if remaining <= 0:
                         policy["limit_reached"] = True
                         break
-                    priority = int(candidate.get("financial_priority") or 0)
                     company_name = candidate.get("company_name") or candidate.get("detected_company_name") or ""
-                    verified = is_verified_corporate_contact(
-                        candidate.get("recipient_email"),
-                        candidate.get("source_url"),
-                        candidate.get("confidence_label"),
-                        company_name,
+                    decision = evaluate_first_contact(
+                        email=candidate.get("recipient_email"),
+                        source_url=candidate.get("source_url"),
+                        confidence_label=candidate.get("confidence_label"),
+                        company_name=company_name,
+                        financial_priority=candidate.get("financial_priority"),
+                        contact_status=candidate.get("contact_status"),
+                        min_priority=AUTO_SEND_MIN_PRIORITY,
+                        sent_today=_sent_today_count(db_path),
+                        daily_limit=AUTO_MAX_FIRST_CONTACTS_PER_DAY,
                     )
-                    if candidate.get("contact_status") == "REJECTED" or priority < AUTO_SEND_MIN_PRIORITY or not verified:
+                    if not decision.allowed:
                         policy["skipped_policy"] += 1
+                        if "daily_limit_reached" in decision.reasons:
+                            policy["limit_reached"] = True
                         continue
                     approve_outreach(candidate["message_id"], db_path=db_path)
                     policy["auto_approved"] += 1
