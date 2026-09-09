@@ -13,9 +13,42 @@ HREF_RE = re.compile(r'href=["\']([^"\']+)["\']', re.I)
 BLOCKED_DOMAINS = {
     "leylobby.gob.cl", "mercadopublico.cl", "www.mercadopublico.cl", "facebook.com", "www.facebook.com",
     "instagram.com", "www.instagram.com", "linkedin.com", "www.linkedin.com", "x.com", "twitter.com",
+    "duckduckgo.com", "html.duckduckgo.com", "www.duckduckgo.com",
 }
 BAD_LOCALPARTS = {"noreply", "no-reply", "donotreply", "example", "test"}
-BLOCKED_EMAIL_DOMAINS = {"minsegpres.gob.cl", "leylobby.gob.cl", "mop.gov.cl", "mercadopublico.cl"}
+BLOCKED_EMAIL_DOMAINS = {
+    "minsegpres.gob.cl", "leylobby.gob.cl", "mop.gov.cl", "mercadopublico.cl",
+    "duckduckgo.com",
+}
+
+
+def _host_matches(host, blocked):
+    host = (host or "").lower().split(":")[0].strip(".")
+    blocked = (blocked or "").lower().strip(".")
+    return bool(host and blocked and (host == blocked or host.endswith("." + blocked)))
+
+
+def is_blocked_host(host):
+    host = (host or "").lower().split(":")[0]
+    return (
+        any(_host_matches(host, blocked) for blocked in BLOCKED_DOMAINS)
+        or host.endswith(".gob.cl")
+        or host.endswith(".gov.cl")
+    )
+
+
+def is_allowed_contact_email(email):
+    value = (email or "").strip().lower()
+    if not EMAIL_RE.fullmatch(value):
+        return False
+    local, _, domain = value.partition("@")
+    if not domain or local in BAD_LOCALPARTS:
+        return False
+    if any(_host_matches(domain, blocked) for blocked in BLOCKED_EMAIL_DOMAINS):
+        return False
+    if domain.endswith(".gob.cl") or domain.endswith(".gov.cl"):
+        return False
+    return True
 
 
 def _fetch_text(url, timeout=None, limit=2_000_000):
@@ -36,10 +69,7 @@ def extract_emails(text):
     found = []
     for candidate in EMAIL_RE.findall(html.unescape(text or "")):
         email = candidate.strip(".,;:()[]{}<>\"\'").lower()
-        local, _, domain = email.partition("@")
-        if not domain or local in BAD_LOCALPARTS:
-            continue
-        if domain in BLOCKED_EMAIL_DOMAINS or domain.endswith(".gob.cl") or domain.endswith(".gov.cl"):
+        if not is_allowed_contact_email(email):
             continue
         if email not in found:
             found.append(email)
@@ -69,10 +99,11 @@ def search_company_websites(company_name, max_results=None):
         url = _unwrap_ddg_url(href)
         if not url.startswith("http"):
             continue
-        host = urlparse(url).netloc.lower().split(":")[0]
-        if not host or host in BLOCKED_DOMAINS or host.endswith(".gob.cl"):
+        parsed = urlparse(url)
+        host = parsed.netloc.lower().split(":")[0]
+        if not host or is_blocked_host(host):
             continue
-        root = f"{urlparse(url).scheme}://{urlparse(url).netloc}/"
+        root = f"{parsed.scheme}://{parsed.netloc}/"
         if root not in urls:
             urls.append(root)
         if len(urls) >= max_results:
@@ -92,7 +123,7 @@ def discover_public_contacts(company_name, seed_urls=None, search_web=True, max_
         if not parsed.scheme or not parsed.netloc:
             continue
         host = parsed.netloc.lower().split(":")[0]
-        if host in BLOCKED_DOMAINS or host.endswith(".gob.cl") or host.endswith(".gov.cl"):
+        if is_blocked_host(host):
             continue
         pages = [base]
         root = f"{parsed.scheme}://{parsed.netloc}/"
@@ -102,8 +133,8 @@ def discover_public_contacts(company_name, seed_urls=None, search_web=True, max_
             text = _fetch_text(page)
             for email in extract_emails(text):
                 domain = email.split("@", 1)[1]
-                site_host = urlparse(page).netloc.lower()
-                confidence = "HIGH" if domain in site_host or site_host.endswith(domain) else "MEDIUM"
+                site_host = urlparse(page).netloc.lower().split(":")[0]
+                confidence = "HIGH" if _host_matches(site_host, domain) else "MEDIUM"
                 key = (email, page)
                 if key in seen:
                     continue
@@ -120,6 +151,38 @@ def discover_public_contacts(company_name, seed_urls=None, search_web=True, max_
     return sorted(unique.values(), key=lambda x: (-rank[x["confidence_label"]], x["email"]))
 
 
+def quarantine_unsafe_contacts(db_path=None):
+    rejected_contacts = 0
+    rejected_messages = 0
+    with transaction(db_path) as conn:
+        contact_rows = conn.execute("SELECT id,email,status FROM contacts").fetchall()
+        unsafe_contact_ids = []
+        for row in contact_rows:
+            if is_allowed_contact_email(row["email"]):
+                continue
+            unsafe_contact_ids.append(int(row["id"]))
+            if row["status"] != "REJECTED":
+                conn.execute("UPDATE contacts SET status='REJECTED',updated_at=? WHERE id=?", (utc_now(), row["id"]))
+                rejected_contacts += 1
+
+        message_rows = conn.execute(
+            "SELECT id,contact_id,recipient_email,status FROM outreach_messages WHERE status IN ('READY_FOR_APPROVAL','APPROVED','FAILED')"
+        ).fetchall()
+        unsafe_ids = set(unsafe_contact_ids)
+        for row in message_rows:
+            unsafe = (
+                (row["contact_id"] is not None and int(row["contact_id"]) in unsafe_ids)
+                or not is_allowed_contact_email(row["recipient_email"])
+            )
+            if unsafe:
+                conn.execute(
+                    "UPDATE outreach_messages SET status='REJECTED',last_error='Contacto descartado por validación automática',updated_at=? WHERE id=?",
+                    (utc_now(), row["id"]),
+                )
+                rejected_messages += 1
+    return {"contacts_rejected": rejected_contacts, "messages_rejected": rejected_messages}
+
+
 def save_contacts(case_id, contacts, db_path=None):
     case = get_case(case_id, db_path)
     now = utc_now()
@@ -127,10 +190,12 @@ def save_contacts(case_id, contacts, db_path=None):
     with transaction(db_path) as conn:
         for item in contacts:
             email = item["email"].strip().lower()
+            if not is_allowed_contact_email(email):
+                continue
             existing = conn.execute("SELECT id FROM contacts WHERE case_id=? AND email=?", (int(case_id), email)).fetchone()
             if existing:
                 conn.execute(
-                    "UPDATE contacts SET source_url=?,confidence_label=?,updated_at=? WHERE id=?",
+                    "UPDATE contacts SET source_url=?,confidence_label=?,status='DISCOVERED',updated_at=? WHERE id=?",
                     (item.get("source_url"), item.get("confidence_label", "LOW"), now, existing["id"]),
                 )
             else:
