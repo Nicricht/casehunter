@@ -5,6 +5,22 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: casehunter
+          POSTGRES_PASSWORD: casehunter
+          POSTGRES_DB: casehunter_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U casehunter -d casehunter_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CASE_HUNTER_TEST_POSTGRES_URL: postgresql://casehunter:casehunter@127.0.0.1:5432/casehunter_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
