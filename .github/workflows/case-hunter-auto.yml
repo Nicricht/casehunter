@@ -3,7 +3,7 @@ name: Case Hunter Auto Cloud
 on:
   workflow_dispatch:
   schedule:
-    - cron: '17 */6 * * *'
+    - cron: '55 * * * *'
 
 concurrency:
   group: case-hunter-auto-cloud-v3
