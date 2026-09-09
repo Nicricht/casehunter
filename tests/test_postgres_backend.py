@@ -1,6 +1,9 @@
 import os
+import tempfile
 import unittest
+from pathlib import Path
 
+from casehunter.cloud_summary import build_cloud_summary
 from casehunter.contact_discovery import save_contacts
 from casehunter.database import backend_name, init_db
 from casehunter.operations import operations_snapshot
@@ -59,6 +62,14 @@ class PostgresBackendTests(unittest.TestCase):
         snapshot = operations_snapshot(POSTGRES_URL)
         self.assertEqual(snapshot["kpis"]["cases_total"], 1)
         self.assertEqual(snapshot["kpis"]["contacts_auto_send_ready"], 1)
+
+        with tempfile.TemporaryDirectory() as td:
+            run_json = Path(td) / "last-auto-run.json"
+            run_json.write_text('{"policy_auto_send":{"enabled":true,"auto_sent":0,"daily_limit":10}}', encoding="utf-8")
+            summary = build_cloud_summary(POSTGRES_URL, run_json)
+        self.assertIn("**Database backend:** postgresql", summary)
+        self.assertIn("**Cases resolved:**", summary)
+        self.assertIn("**Policy auto-send enabled:** True", summary)
 
 
 if __name__ == "__main__":
