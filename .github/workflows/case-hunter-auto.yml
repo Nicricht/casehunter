@@ -14,6 +14,9 @@ permissions:
 
 env:
   CASE_HUNTER_AUTO_SEND_APPROVED: '1'
+  CASE_HUNTER_AUTO_POLICY_SEND: '1'
+  CASE_HUNTER_AUTO_SEND_MIN_PRIORITY: '70'
+  CASE_HUNTER_AUTO_MAX_FIRST_CONTACTS_PER_DAY: '10'
   CASE_HUNTER_AUTO_CONTACT_DISCOVERY: '1'
   CASE_HUNTER_AUTO_MONITOR_REPLIES: '1'
   CASE_HUNTER_AUTO_SEND_FOLLOWUPS: '1'
@@ -75,6 +78,7 @@ jobs:
         if: always()
         run: |
           python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
           import sqlite3
           from pathlib import Path
 
@@ -102,8 +106,19 @@ jobs:
               due = conn.execute("SELECT COUNT(*) n FROM followups WHERE status='DUE'").fetchone()['n']
               print(f"**Replies classified:** {replies}  ")
               print(f"**Follow-ups due:** {due}  ")
+              run_json = Path('data/last-auto-run.json')
+              if run_json.exists():
+                  try:
+                      payload = json.loads(run_json.read_text(encoding='utf-8'))
+                      policy = payload.get('policy_auto_send') or {}
+                      print(f"**Policy auto-send enabled:** {policy.get('enabled', False)}  ")
+                      print(f"**Policy auto-approved:** {policy.get('auto_approved', 0)}  ")
+                      print(f"**Policy auto-sent:** {policy.get('auto_sent', 0)}  ")
+                      print(f"**Daily first-contact limit:** {policy.get('daily_limit', 0)}  ")
+                  except Exception:
+                      pass
               print('')
-              print('## Top approval queue')
+              print('## Top outreach queue')
               rows = conn.execute('''
                   SELECT o.status, o.recipient_email,
                          c.detected_company_name, c.contract_ref, c.financial_priority
