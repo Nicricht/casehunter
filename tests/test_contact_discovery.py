@@ -74,6 +74,21 @@ class ContactDiscoverySafetyTests(unittest.TestCase):
         queue = list_outreach(db_path=self.db)
         self.assertEqual(queue[0]["status"], "REJECTED")
 
+    def test_quarantine_rejects_contact_from_blocked_source_even_if_email_domain_is_external(self):
+        case_id = import_candidate(candidate("CONTACT-SAFETY-SOURCE"), db_path=self.db)["case"]["id"]
+        now = utc_now()
+        with transaction(self.db) as conn:
+            conn.execute(
+                """INSERT INTO contacts(case_id,company_name,email,source_url,confidence_label,status,created_at,updated_at)
+                   VALUES(?,?,?,?,?,'DISCOVERED',?,?)""",
+                (case_id, "Empresa Segura SpA", "eurep@itgovernance.eu", "https://duckduckgo.com/contact", "MEDIUM", now, now),
+            )
+        result = quarantine_unsafe_contacts(self.db)
+        self.assertEqual(result["contacts_rejected"], 1)
+        with transaction(self.db) as conn:
+            row = conn.execute("SELECT status FROM contacts WHERE case_id=?", (case_id,)).fetchone()
+        self.assertEqual(row["status"], "REJECTED")
+
     def test_medium_contact_stays_needs_contact_in_auto_cycle(self):
         imported = import_candidate(candidate("CONTACT-SAFETY-2"), db_path=self.db)
         fake_scan = {"import": {"created": 0, "updated": 1, "case_ids": [imported["case"]["id"]]}}
