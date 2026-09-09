@@ -5,6 +5,8 @@ import os
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.getenv("CASE_HUNTER_DATA_DIR", BASE_DIR / "data"))
 DATABASE_PATH = Path(os.getenv("CASE_HUNTER_DB", DATA_DIR / "case_hunter.db"))
+# Optional persistent backend. SQLite remains the zero-cost default.
+DATABASE_URL = (os.getenv("CASE_HUNTER_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip()
 DEFAULT_LEY_LOBBY_URL = os.getenv(
     "CASE_HUNTER_LEY_LOBBY_URL",
     "https://www.leylobby.gob.cl/instituciones/AM002/cargos-pasivos/642196/audiencias",
