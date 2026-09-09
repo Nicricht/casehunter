@@ -7,6 +7,7 @@ from urllib.request import Request, urlopen
 
 from .config import CONTACT_DISCOVERY_MAX_SITES, CONTACT_DISCOVERY_TIMEOUT
 from .database import row_to_dict, transaction, utc_now
+from .engines.contact_trust import assess_contact
 from .repository import get_case
 
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
@@ -79,28 +80,40 @@ def is_allowed_contact_email(email):
     return True
 
 
-def is_verified_corporate_contact(email, source_url, confidence_label, company_name):
-    """Strict gate for unattended first-contact email.
-
-    The address must be HIGH confidence, published on an allowed web source,
-    use the same domain as that source, and the domain must resemble the
-    company name. A false negative is safer here than emailing the wrong firm.
-    """
-    if (confidence_label or "").upper() != "HIGH":
-        return False
+def contact_assessment(email, source_url, confidence_label, company_name, independent_sources=1):
     if not is_allowed_contact_email(email) or not is_allowed_contact_source(source_url):
-        return False
-    parsed = urlparse(source_url or "")
-    site_host = parsed.netloc.lower().split(":")[0]
-    email_domain = (email or "").strip().lower().partition("@")[2]
-    if not site_host or not email_domain or not _host_matches(site_host, email_domain):
-        return False
-    return _company_domain_matches(company_name, site_host)
+        return None
+    return assess_contact(
+        email,
+        source_url,
+        confidence_label,
+        company_name,
+        independent_sources=max(1, int(independent_sources or 1)),
+    )
+
+
+def is_verified_corporate_contact(email, source_url, confidence_label, company_name, independent_sources=1):
+    """Evidence-based gate for unattended first-contact email.
+
+    A same-domain corporate address remains the strongest signal, but domain
+    equality is no longer mandatory. An external or free-mail address can pass
+    when it is published by a website whose host is strongly related to the
+    target company. Search engines, government hosts and unrelated sites remain
+    blocked as contact sources.
+    """
+    assessment = contact_assessment(
+        email,
+        source_url,
+        confidence_label,
+        company_name,
+        independent_sources=independent_sources,
+    )
+    return bool(assessment and assessment.auto_send_allowed)
 
 
 def _fetch_text(url, timeout=None, limit=2_000_000):
     timeout = CONTACT_DISCOVERY_TIMEOUT if timeout is None else max(2, int(timeout))
-    req = Request(url, headers={"User-Agent": "CaseHunterResolve/2.4 (+public-contact-discovery)", "Accept": "text/html,text/plain;q=0.9,*/*;q=0.5"})
+    req = Request(url, headers={"User-Agent": "CaseHunterResolve/2.5 (+public-contact-discovery)", "Accept": "text/html,text/plain;q=0.9,*/*;q=0.5"})
     try:
         with urlopen(req, timeout=timeout) as response:
             content_type = (response.headers.get("Content-Type") or "").lower()
@@ -181,7 +194,12 @@ def discover_public_contacts(company_name, seed_urls=None, search_web=True, max_
             for email in extract_emails(text):
                 domain = email.split("@", 1)[1]
                 site_host = urlparse(page).netloc.lower().split(":")[0]
-                confidence = "HIGH" if _host_matches(site_host, domain) else "MEDIUM"
+                if _host_matches(site_host, domain):
+                    confidence = "HIGH"
+                elif _company_domain_matches(company_name, site_host):
+                    confidence = "MEDIUM"
+                else:
+                    confidence = "LOW"
                 key = (email, page)
                 if key in seen:
                     continue
@@ -196,6 +214,27 @@ def discover_public_contacts(company_name, seed_urls=None, search_web=True, max_
         if current is None or rank[item["confidence_label"]] > rank[current["confidence_label"]]:
             unique[item["email"]] = item
     return sorted(unique.values(), key=lambda x: (-rank[x["confidence_label"]], x["email"]))
+
+
+def rank_contacts_for_company(contacts, company_name):
+    ranked = []
+    source_counts = {}
+    for item in contacts:
+        source_counts.setdefault(item.get("email"), set()).add(item.get("source_url") or "")
+    for item in contacts:
+        assessment = contact_assessment(
+            item.get("email"),
+            item.get("source_url"),
+            item.get("confidence_label"),
+            company_name,
+            independent_sources=len(source_counts.get(item.get("email"), set())),
+        )
+        enriched = dict(item)
+        enriched["trust_score"] = assessment.score if assessment else 0
+        enriched["trust_decision"] = assessment.decision if assessment else "REJECT"
+        enriched["trust_reasons"] = list(assessment.reasons) if assessment else ["blocked_or_invalid"]
+        ranked.append(enriched)
+    return sorted(ranked, key=lambda item: (-int(item.get("trust_score") or 0), item.get("email") or ""))
 
 
 def quarantine_unsafe_contacts(db_path=None):
