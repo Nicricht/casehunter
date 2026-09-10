@@ -2,10 +2,6 @@ name: Case Hunter Auto Cloud
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/case-hunter-auto.yml'
   schedule:
     - cron: '17 */6 * * *'
 
