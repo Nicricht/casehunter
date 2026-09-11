@@ -25,6 +25,7 @@ from .repository import (
     update_document,
     apply_resolution_playbook,
 )
+from .portfolio_watch import list_portfolios
 from .scanner_service import list_scans, run_ley_lobby_scan, run_mercado_publico_sync
 from .schemas import (ActionCreate, ActionUpdate, AutoRunRequest, BlockerUpdate, CompanyCreate, CompanyLink, DocumentUpdate,
     OutreachApprove, OutreachRecipientUpdate, ScanRequest, StatusUpdate, TimelineCreate, MercadoPublicoSyncRequest)
@@ -125,6 +126,19 @@ def create_app(db_path=None, auth_username=None, auth_password=None):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/api/portfolios")
+    def get_portfolios(
+        min_cases: int = Query(default=2, ge=1, le=100),
+        active_only: bool = True,
+        search: str | None = Query(default=None, max_length=100),
+    ):
+        return list_portfolios(
+            min_cases=min_cases,
+            active_only=active_only,
+            search=search,
+            db_path=app.state.db_path,
+        )
 
     @app.get("/api/cases")
     def get_cases(status: str | None = None, company_id: int | None = None, search: str | None = Query(default=None, max_length=100)):
