@@ -10,6 +10,7 @@ from .database import init_db
 from .scanner_service import run_ley_lobby_scan
 from .auto_service import run_auto_cycle, run_daemon
 from .followup import process_due_followups
+from .pilot_watch import build_watchlist
 from .reply_monitor import sync_replies
 
 
@@ -38,6 +39,10 @@ def main(argv=None):
 
     followups = sub.add_parser("followups", help="Procesa seguimientos vencidos")
     followups.add_argument("--send", action="store_true", help="Envía seguimientos vencidos si Gmail/SMTP está configurado")
+
+    watchlist = sub.add_parser("watchlist", help="Prioriza casos activos y muestra la siguiente acción")
+    watchlist.add_argument("--search", default=None, help="Filtra por empresa, contrato o identificador")
+    watchlist.add_argument("--limit", type=int, default=20, help="Máximo de casos a mostrar")
 
     scan = sub.add_parser("scan", help="Ejecuta un escaneo de Ley del Lobby")
     scan.add_argument("url", nargs="?", default=DEFAULT_LEY_LOBBY_URL)
@@ -71,6 +76,10 @@ def main(argv=None):
     if args.command == "followups":
         init_db()
         print(json.dumps(process_due_followups(send=args.send), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "watchlist":
+        init_db()
+        print(json.dumps(build_watchlist(search=args.search, limit=args.limit), ensure_ascii=False, indent=2))
         return 0
     if args.command == "scan":
         init_db()
