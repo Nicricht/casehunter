@@ -3,6 +3,7 @@ from io import BytesIO
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
+import os
 import time
 
 from pypdf import PdfReader
@@ -148,7 +149,69 @@ def html_links(html: str, base_url: str):
     return list(dict.fromkeys(parser.links))
 
 
-def extract_pdf_text(raw: bytes, max_pages: int = 200, max_chars: int = 1_000_000) -> str:
+def _ocr_pdf_text(raw: bytes, max_pages: int = 30, max_chars: int = 300_000, dpi: int = 160) -> str:
+    """OCR only the first bounded set of pages of a scanned public PDF.
+
+    Tesseract is intentionally used as a fallback, never as the first parser. This
+    keeps ordinary text PDFs fast and prevents a large scanned file from exhausting
+    the automatic cycle.
+    """
+    try:
+        import fitz
+        import pytesseract
+        from PIL import Image
+    except ImportError as exc:
+        raise ValueError("El PDF requiere OCR, pero el motor OCR no está instalado.") from exc
+
+    lang = (os.getenv("CASE_HUNTER_OCR_LANG") or "spa+eng").strip()
+    try:
+        document = fitz.open(stream=raw, filetype="pdf")
+    except Exception as exc:
+        raise ValueError("No se pudo abrir el PDF para OCR.") from exc
+
+    parts = []
+    total = 0
+    page_limit = min(len(document), max(1, int(max_pages)))
+    scale = max(1.0, float(dpi) / 72.0)
+    matrix = fitz.Matrix(scale, scale)
+
+    try:
+        for index in range(page_limit):
+            page = document[index]
+            pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+            image = Image.open(BytesIO(pixmap.tobytes("png")))
+            try:
+                text = (pytesseract.image_to_string(image, lang=lang, config="--psm 6") or "").strip()
+            except Exception as exc:
+                raise ValueError(f"El motor OCR falló al procesar la página {index + 1}: {exc}") from exc
+            finally:
+                image.close()
+
+            if not text:
+                continue
+            remaining = max_chars - total
+            if remaining <= 0:
+                break
+            chunk = text[:remaining]
+            parts.append(chunk)
+            total += len(chunk)
+    finally:
+        document.close()
+
+    result = "\n".join(parts).strip()
+    if not result:
+        raise ValueError("El PDF no produjo texto utilizable ni mediante OCR.")
+    return result
+
+
+def extract_pdf_text(
+    raw: bytes,
+    max_pages: int = 200,
+    max_chars: int = 1_000_000,
+    allow_ocr: bool = True,
+    min_native_chars: int = 80,
+    ocr_engine=None,
+) -> str:
     if not raw:
         raise ValueError("El PDF está vacío.")
     reader = PdfReader(BytesIO(raw), strict=False)
@@ -174,10 +237,31 @@ def extract_pdf_text(raw: bytes, max_pages: int = 200, max_chars: int = 1_000_00
         chunk = text[:remaining]
         parts.append(chunk)
         total += len(chunk)
-    result = "\n".join(parts).strip()
-    if not result:
+    native = "\n".join(parts).strip()
+    if len(native) >= max(1, int(min_native_chars)):
+        return native
+
+    if not allow_ocr:
+        if native:
+            return native
         raise ValueError("El PDF no contiene texto nativo extraíble. Puede requerir OCR.")
-    return result
+
+    engine = ocr_engine or _ocr_pdf_text
+    try:
+        ocr_text = (engine(raw) or "").strip()
+    except ValueError:
+        if native:
+            return native
+        raise
+    except Exception as exc:
+        if native:
+            return native
+        raise ValueError(f"No se pudo ejecutar OCR sobre el PDF: {exc}") from exc
+
+    # Some PDFs contain a tiny text layer plus scanned pages. Prefer whichever
+    # extraction provides materially more information instead of concatenating
+    # duplicated text.
+    return ocr_text if len(ocr_text) > len(native) else native
 
 
 def fetch_public_document(url: str, timeout: int = 20, retries: int = 2, max_bytes: int = 10_000_000):
@@ -222,7 +306,7 @@ def fetch_public_document(url: str, timeout: int = 20, retries: int = 2, max_byt
     if content_type not in {"text/html", "text/plain"}:
         raise ValueError(
             f"Tipo de contenido no soportado: {content_type}. "
-            "Use una página HTML, texto público o PDF con texto nativo."
+            "Use una página HTML, texto público o PDF."
         )
 
     decoded = raw.decode(charset, errors="replace")
