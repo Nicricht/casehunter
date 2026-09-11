@@ -29,7 +29,8 @@ def _candidate_from_text(text: str, source_url: str, detail_url=None):
     date_match = DATE_PATTERN.search(text)
     case = build_case(text)
     signal_types = [p["type"] for p in case["problems"] if p["type"] in SIGNAL_TYPES]
-    if not signal_types:
+    outcome_state = case.get("outcome", {}).get("state", "OPEN_OR_UNKNOWN")
+    if not signal_types and outcome_state == "OPEN_OR_UNKNOWN":
         return None
 
     return {
@@ -40,6 +41,8 @@ def _candidate_from_text(text: str, source_url: str, detail_url=None):
         "safis": case["safis"],
         "amounts_clp": case["amounts_clp"],
         "problems": case["problems"],
+        "historical_problems": case.get("historical_problems", []),
+        "outcome": case.get("outcome"),
         "confidence": case["confidence"],
         "represented_entities": [],
         "works_for": [],
@@ -78,6 +81,7 @@ def _candidate_key(item):
         item.get("date"),
         tuple(item.get("safis", [])),
         tuple(p["type"] for p in item.get("problems", [])),
+        (item.get("outcome") or {}).get("state"),
     )
 
 
@@ -104,7 +108,6 @@ def _pagination_urls(html: str, base_url: str):
             continue
         page = parse_qs(parsed.query).get("page")
         if page and page[0].isdigit():
-            # Page 1 is the canonical base URL and must not be fetched twice.
             if int(page[0]) == 1:
                 continue
             found.append(link)
@@ -166,26 +169,21 @@ def enrich_candidate(candidate, timeout=20):
     if not detail_url:
         return candidate
     document = fetch_public_document(detail_url, timeout=timeout)
-    detail_case = build_case(document["text"])
     metadata = _detail_metadata(document)
+    combined_text = "\n".join([candidate.get("raw_text", ""), document["text"]])
+    combined_case = build_case(combined_text)
 
     merged = dict(candidate)
     merged["audience_id"] = metadata["audience_id"] or merged.get("audience_id")
     merged["date"] = metadata["date"] or merged.get("date")
     merged["represented_entities"] = metadata["represented_entities"]
     merged["works_for"] = metadata["works_for"]
-    merged["safis"] = list(dict.fromkeys(merged.get("safis", []) + detail_case["safis"]))
-    merged["amounts_clp"] = list(dict.fromkeys(merged.get("amounts_clp", []) + detail_case["amounts_clp"]))
-
-    problems_by_type = {p["type"]: p for p in merged.get("problems", [])}
-    for problem in detail_case["problems"]:
-        current = problems_by_type.get(problem["type"])
-        if not current:
-            problems_by_type[problem["type"]] = problem
-        else:
-            current["matched_patterns"] = list(dict.fromkeys(current["matched_patterns"] + problem["matched_patterns"]))
-    merged["problems"] = list(problems_by_type.values())
-    merged["confidence"] = build_case("\n".join([merged.get("raw_text", ""), document["text"]]))["confidence"]
+    merged["safis"] = combined_case["safis"]
+    merged["amounts_clp"] = combined_case["amounts_clp"]
+    merged["problems"] = combined_case["problems"]
+    merged["historical_problems"] = combined_case.get("historical_problems", [])
+    merged["outcome"] = combined_case.get("outcome")
+    merged["confidence"] = combined_case["confidence"]
     merged["detail_text"] = document["text"].strip()
     return merged
 
