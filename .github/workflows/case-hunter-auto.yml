@@ -35,6 +35,7 @@ env:
   CASE_HUNTER_CONTACT_MAX_SITES: '2'
   CASE_HUNTER_AUTO_INTERVAL_MINUTES: '360'
   CASE_HUNTER_DATA_DIR: ${{ github.workspace }}/data
+  CASE_HUNTER_OCR_LANG: 'spa+eng'
 
 jobs:
   hunt:
@@ -60,6 +61,11 @@ jobs:
           restore-keys: |
             case-hunter-state-v3-
             case-hunter-state-v2-
+
+      - name: Install OCR runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-spa
 
       - name: Install dependencies
         run: |
