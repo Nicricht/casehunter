@@ -6,7 +6,8 @@ from unittest.mock import patch
 from casehunter.database import init_db, transaction
 from casehunter.followup import list_followups, process_due_followups
 from casehunter.outreach import approve_outreach, ensure_outreach_draft, send_outreach
-from casehunter.reply_monitor import classify_reply, ingest_reply, list_replies
+from casehunter.pilot_metrics import get_pilot_metric
+from casehunter.reply_monitor import classify_reply, ingest_reply, list_replies, sync_manual_outreach
 from casehunter.repository import get_case, import_candidate
 
 
@@ -56,6 +57,12 @@ class ReplyCycleTests(unittest.TestCase):
             "NO_AGENCY_RESPONSE",
         )
 
+    def test_classifier_detects_pilot_request(self):
+        self.assertEqual(
+            classify_reply("Gracias por la información, usted seguirá realizando seguimiento del caso?"),
+            "PILOT_REQUESTED",
+        )
+
     def test_sent_message_schedules_followup(self):
         sent = self._sent_outreach()
         self.assertEqual(sent["status"], "SENT")
@@ -93,6 +100,56 @@ class ReplyCycleTests(unittest.TestCase):
         }, db_path=self.db)
         self.assertEqual(result["reply"]["classification"], "NO_AGENCY_RESPONSE")
         self.assertEqual(get_case(self.case["id"], self.db)["status"], "BLOCKER_IDENTIFIED")
+
+    def test_pilot_request_starts_active_pilot_and_watch_action(self):
+        sent = self._sent_outreach()
+        result = ingest_reply({
+            "outreach_id": sent["id"],
+            "case_id": self.case["id"],
+            "provider_message_id": "<reply-pilot@example.test>",
+            "sender_email": "contacto@empresa.cl",
+            "subject": "Re: seguimiento",
+            "body": "Gracias por la información, usted seguirá realizando seguimiento del caso?",
+        }, db_path=self.db)
+        self.assertEqual(result["reply"]["classification"], "PILOT_REQUESTED")
+        refreshed = get_case(self.case["id"], self.db)
+        self.assertEqual(refreshed["status"], "FOLLOW_UP")
+        self.assertTrue(any(a["action_type"] == "WATCH_PUBLIC_CASE" for a in refreshed["actions"]))
+        self.assertEqual(get_pilot_metric(self.case["id"], self.db)["stage"], "ACTIVE_PILOT")
+
+    def test_manual_gmail_sent_message_is_imported_for_unambiguous_contact(self):
+        now = "2026-09-11T12:00:00+00:00"
+        with transaction(self.db) as conn:
+            conn.execute(
+                """INSERT INTO contacts(case_id,company_name,email,source_url,confidence_label,status,created_at,updated_at)
+                   VALUES(?,?,?,?,?,'VERIFIED',?,?)""",
+                (
+                    self.case["id"], "Empresa Respuesta SpA", "cobranzas@empresa.cl",
+                    "https://empresa.cl/contacto", "HIGH", now, now,
+                ),
+            )
+        manual = [{
+            "case_id": self.case["id"],
+            "contact_id": 1,
+            "recipient_email": "cobranzas@empresa.cl",
+            "provider_message_id": "<manual-gmail@example.test>",
+            "subject": "Seguimiento de caso",
+            "body": "Correo enviado directamente desde Gmail.",
+            "sent_at": now,
+        }]
+        with patch("casehunter.reply_monitor.imap_configured", return_value=True), patch(
+            "casehunter.reply_monitor.fetch_sent_messages", return_value=manual
+        ):
+            result = sync_manual_outreach(self.db)
+        self.assertEqual(result["imported"], 1)
+        with transaction(self.db) as conn:
+            row = conn.execute(
+                "SELECT status,case_id,recipient_email FROM outreach_messages WHERE provider_message_id=?",
+                ("<manual-gmail@example.test>",),
+            ).fetchone()
+        self.assertEqual(row["status"], "SENT")
+        self.assertEqual(int(row["case_id"]), int(self.case["id"]))
+        self.assertEqual(row["recipient_email"], "cobranzas@empresa.cl")
 
     def test_resolved_reply_closes_case(self):
         sent = self._sent_outreach()
