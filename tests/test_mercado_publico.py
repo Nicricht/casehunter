@@ -3,7 +3,12 @@ import unittest
 from datetime import date
 from unittest.mock import patch
 
-from casehunter.mercado_publico import lookup_provider, order_to_candidate, scan_purchase_orders_for_rut
+from casehunter.mercado_publico import (
+    lookup_provider,
+    order_to_candidate,
+    purchase_order_by_code,
+    scan_purchase_orders_for_rut,
+)
 
 
 class MercadoPublicoTests(unittest.TestCase):
@@ -13,6 +18,15 @@ class MercadoPublicoTests(unittest.TestCase):
         provider = lookup_provider("70.017.820-k", ticket="ticket")
         self.assertEqual(provider["provider_code"], "17793")
         self.assertEqual(provider["name"], "Proveedor Demo SpA")
+
+    @patch("casehunter.mercado_publico._get_json")
+    def test_purchase_order_lookup_by_code(self, mocked):
+        mocked.return_value = {"Listado": [{"Codigo": "2097-241-SE26", "CodigoEstado": 6, "Estado": "Aceptada"}]}
+        order = purchase_order_by_code("2097-241-SE26", ticket="ticket")
+        self.assertEqual(order["Codigo"], "2097-241-SE26")
+        requested_url = mocked.call_args.args[0]
+        self.assertIn("codigo=2097-241-SE26", requested_url)
+        self.assertIn("ticket=ticket", requested_url)
 
     def test_pending_reception_becomes_case(self):
         order = {
