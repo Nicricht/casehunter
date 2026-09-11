@@ -1,4 +1,5 @@
 from .database import row_to_dict, transaction
+from .pilot_metrics import pilot_funnel
 
 
 ACTIVE_CASE_STATUSES = {
@@ -21,8 +22,8 @@ def _ratio(numerator, denominator):
 def operations_snapshot(db_path=None, top_limit=10):
     """Return business-facing KPIs instead of infrastructure-only metrics.
 
-    The product should optimize for confirmed cases, replies and resolutions,
-    not merely for scans or email volume.
+    The product should optimize for confirmed cases, replies, active pilots and
+    resolutions, not merely for scans or email volume.
     """
     top_limit = max(1, min(50, int(top_limit)))
     with transaction(db_path) as conn:
@@ -58,6 +59,9 @@ def operations_snapshot(db_path=None, top_limit=10):
             (top_limit,),
         ).fetchall()
 
+    pilots = pilot_funnel(limit=500, db_path=db_path)
+    pilot_counts = pilots["counts"]
+
     return {
         "kpis": {
             "cases_total": total_cases,
@@ -71,7 +75,12 @@ def operations_snapshot(db_path=None, top_limit=10):
             "followups_due": due_followups,
             "reply_rate": _ratio(replies, sent),
             "resolution_rate": _ratio(resolved_cases, total_cases),
+            "pilots_active": pilots["active_pilots"],
+            "pilot_engaged": pilot_counts["ENGAGED"],
+            "pilot_problem_confirmed": pilot_counts["PROBLEM_CONFIRMED"],
+            "pilot_resolved": pilots["resolved"],
         },
         "case_statuses": status_counts,
+        "pilot_funnel": pilots,
         "top_opportunities": [row_to_dict(row) for row in top],
     }
