@@ -8,6 +8,7 @@ from .gmail_service import fetch_replies, fetch_sent_messages, imap_configured
 from .pilot_metrics import start_pilot
 from .portfolio_discovery import refresh_due_pilot_portfolios
 from .public_watch import run_active_watches
+from .resolution_learning import refresh_active_pilot_recommendations
 from .repository import add_timeline_event, create_action, update_case_status
 
 
@@ -214,9 +215,15 @@ def ingest_reply(reply, db_path=None):
 
 
 def _run_background_case_intelligence(db_path=None):
+    # Portfolios run before precedent learning so newly discovered resolved cases
+    # are immediately available as evidence in the same cycle.
+    public_watch = run_active_watches(db_path=db_path)
+    pilot_portfolios = refresh_due_pilot_portfolios(db_path=db_path)
+    resolution_learning = refresh_active_pilot_recommendations(db_path=db_path)
     return {
-        "public_watch": run_active_watches(db_path=db_path),
-        "pilot_portfolios": refresh_due_pilot_portfolios(db_path=db_path),
+        "public_watch": public_watch,
+        "pilot_portfolios": pilot_portfolios,
+        "resolution_learning": resolution_learning,
     }
 
 
