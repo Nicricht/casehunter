@@ -1,9 +1,11 @@
+import hashlib
 from datetime import date
 
 from .config import STORE_REPLY_CONTENT
 from .database import row_to_dict, transaction, utc_now
 from .engines.reply_intelligence import REPLY_CLASSES, analyze_reply, classify_reply
-from .gmail_service import fetch_replies, imap_configured
+from .gmail_service import fetch_replies, fetch_sent_messages, imap_configured
+from .pilot_metrics import start_pilot
 from .repository import add_timeline_event, create_action, update_case_status
 
 
@@ -45,6 +47,89 @@ def _ensure_action(case_id, action_type, title, due_date=None, note=None, db_pat
     )
 
 
+def _manual_outreach_targets(db_path=None):
+    """Return only recipient addresses that map unambiguously to one case."""
+    with transaction(db_path) as conn:
+        contact_rows = conn.execute(
+            "SELECT id AS contact_id,case_id,email FROM contacts WHERE status<>'REJECTED' AND email IS NOT NULL"
+        ).fetchall()
+        outreach_rows = conn.execute(
+            "SELECT contact_id,case_id,recipient_email AS email FROM outreach_messages WHERE recipient_email IS NOT NULL"
+        ).fetchall()
+
+    grouped = {}
+    for raw in list(contact_rows) + list(outreach_rows):
+        row = row_to_dict(raw)
+        email = (row.get("email") or "").strip().lower()
+        if not email:
+            continue
+        entry = grouped.setdefault(email, {"case_ids": set(), "contact_ids": []})
+        entry["case_ids"].add(int(row["case_id"]))
+        if row.get("contact_id") is not None:
+            entry["contact_ids"].append(int(row["contact_id"]))
+
+    targets = []
+    ambiguous = 0
+    for email, entry in grouped.items():
+        if len(entry["case_ids"]) != 1:
+            ambiguous += 1
+            continue
+        targets.append({
+            "email": email,
+            "case_id": next(iter(entry["case_ids"])),
+            "contact_id": entry["contact_ids"][0] if entry["contact_ids"] else None,
+        })
+    return targets, ambiguous
+
+
+def sync_manual_outreach(db_path=None):
+    """Import manually sent Gmail messages when recipient-to-case identity is exact.
+
+    The bridge deliberately skips ambiguous recipient addresses. It never guesses a
+    case from message text or a company domain.
+    """
+    if not imap_configured():
+        return {"configured": False, "targets": 0, "ambiguous": 0, "checked": 0, "imported": 0}
+
+    targets, ambiguous = _manual_outreach_targets(db_path)
+    sent_messages = fetch_sent_messages(targets)
+    imported = 0
+    now = utc_now()
+    for message in sent_messages:
+        provider_id = (message.get("provider_message_id") or "").strip()
+        if not provider_id:
+            continue
+        dedupe_key = hashlib.sha256(
+            f"MANUAL_GMAIL|{int(message['case_id'])}|{provider_id}".encode("utf-8")
+        ).hexdigest()
+        with transaction(db_path) as conn:
+            existing = conn.execute(
+                "SELECT id FROM outreach_messages WHERE provider_message_id=? OR dedupe_key=? LIMIT 1",
+                (provider_id, dedupe_key),
+            ).fetchone()
+            if existing:
+                continue
+            conn.execute(
+                """INSERT INTO outreach_messages(
+                       case_id,contact_id,recipient_email,subject,body,status,dedupe_key,
+                       sent_at,provider_message_id,created_at,updated_at
+                   ) VALUES(?,?,?,?,?,'SENT',?,?,?,?,?)""",
+                (
+                    int(message["case_id"]), message.get("contact_id"), message["recipient_email"],
+                    message.get("subject") or "Correo Gmail importado", message.get("body") or "",
+                    dedupe_key, message.get("sent_at") or now, provider_id, now, now,
+                ),
+            )
+            imported += 1
+    return {
+        "configured": True,
+        "targets": len(targets),
+        "ambiguous": ambiguous,
+        "checked": len(sent_messages),
+        "imported": imported,
+    }
+
+
 def _apply_reply_to_case(reply, decision, db_path=None):
     case_id = int(reply["case_id"])
     today = date.today().isoformat()
@@ -52,10 +137,19 @@ def _apply_reply_to_case(reply, decision, db_path=None):
     if decision.next_case_status:
         update_case_status(case_id, decision.next_case_status, db_path)
 
+    if decision.classification == "PILOT_REQUESTED":
+        start_pilot(
+            case_id,
+            note="La empresa solicitó o confirmó que Case Hunter continúe realizando seguimiento activo del caso.",
+            db_path=db_path,
+        )
+
     if decision.action_type and decision.action_title:
         notes = {
             "SEND_PUBLIC_SUMMARY": "La empresa respondió positivamente o pidió antecedentes. Mantener separados hechos confirmados e hipótesis.",
             "CONFIRM_CURRENT_BLOCKER": "La empresa indicó que la situación continúa pendiente.",
+            "ESCALATE_RESPONSIBLE_UNIT": "El organismo no respondió. Identificar responsable actual y pedir folio, estado y fecha concreta.",
+            "WATCH_PUBLIC_CASE": "Piloto activo. Revisar cambios públicos y respuestas del organismo; avisar solo cuando exista una novedad accionable.",
             "NO_FURTHER_OUTREACH": f"Clasificación automática de respuesta: {decision.classification}.",
             "REVIEW_REPLY": "La respuesta no pudo clasificarse con suficiente precisión.",
         }
@@ -119,7 +213,12 @@ def ingest_reply(reply, db_path=None):
 
 def sync_replies(db_path=None):
     if not imap_configured():
-        return {"configured": False, "checked": 0, "created": 0, "classifications": {}}
+        return {
+            "configured": False, "checked": 0, "created": 0, "classifications": {},
+            "manual_outreach_imported": 0,
+        }
+
+    manual = sync_manual_outreach(db_path)
     with transaction(db_path) as conn:
         rows = conn.execute(
             """SELECT id,case_id,recipient_email,subject,provider_message_id,status
@@ -137,4 +236,12 @@ def sync_replies(db_path=None):
             created += 1
             label = result["reply"]["classification"]
             classes[label] = classes.get(label, 0) + 1
-    return {"configured": True, "checked": len(incoming), "created": created, "classifications": classes}
+    return {
+        "configured": True,
+        "checked": len(incoming),
+        "created": created,
+        "classifications": classes,
+        "manual_outreach_checked": manual["checked"],
+        "manual_outreach_imported": manual["imported"],
+        "manual_targets_ambiguous": manual["ambiguous"],
+    }
