@@ -74,7 +74,7 @@ def list_pilot_metrics(limit=100, db_path=None):
             LEFT JOIN outreach_replies r ON r.case_id=k.id
             LEFT JOIN actions a ON a.case_id=k.id
             LEFT JOIN timeline_events te ON te.case_id=k.id
-            GROUP BY k.id
+            GROUP BY k.id, c.name, k.detected_company_name, k.status, k.current_blocker, k.financial_priority
             ORDER BY k.financial_priority DESC, k.id DESC
             LIMIT ?
             """,
