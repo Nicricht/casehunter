@@ -71,6 +71,7 @@ jobs:
         env:
           CASE_HUNTER_DATABASE_URL: ''
           DATABASE_URL: ''
+          MERCADO_PUBLICO_TICKET: ''
         run: python -m casehunter verify
 
       - name: Run automatic hunting and follow-up cycle
@@ -79,6 +80,7 @@ jobs:
           CASE_HUNTER_SMTP_PASSWORD: ${{ secrets.CASE_HUNTER_GMAIL_APP_PASSWORD }}
           CASE_HUNTER_IMAP_USERNAME: ${{ secrets.CASE_HUNTER_GMAIL_USERNAME }}
           CASE_HUNTER_IMAP_PASSWORD: ${{ secrets.CASE_HUNTER_GMAIL_APP_PASSWORD }}
+          MERCADO_PUBLICO_TICKET: ${{ secrets.MERCADO_PUBLICO_TICKET }}
         run: |
           mkdir -p data
           python -m casehunter auto | tee data/last-auto-run.json
