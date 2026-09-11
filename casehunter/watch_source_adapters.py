@@ -28,9 +28,11 @@ OFFICIAL_PATH_TERMS = (
     "tesorer",
     "presupuesto",
     "contrato",
+    "pago",
+    "remesa",
 )
 
-SKIPPED_EXTENSIONS = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip")
+SKIPPED_EXTENSIONS = (".doc", ".docx", ".xls", ".xlsx", ".zip")
 
 
 def source_kind(source_url):
@@ -45,6 +47,8 @@ def source_kind(source_url):
         return "TRANSPARENCIA"
     if host in {"mercadopublico.cl", "www.mercadopublico.cl", "api.mercadopublico.cl"}:
         return "MERCADO_PUBLICO_WEB"
+    if parsed.path.lower().endswith(".pdf"):
+        return "OFFICIAL_PDF"
     if host.endswith(".gob.cl"):
         return "GOVERNMENT_WEB"
     return "PUBLIC_WEB"
@@ -94,14 +98,22 @@ def _same_host_or_official(candidate_url, parent_url):
     parsed = urlparse(str(candidate_url or ""))
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return False
-    if parsed.path.lower().endswith(SKIPPED_EXTENSIONS):
+    path = parsed.path.lower()
+    if path.endswith(SKIPPED_EXTENSIONS):
         return False
     host = parsed.netloc.lower().split(":", 1)[0]
     parent_host = urlparse(str(parent_url or "")).netloc.lower().split(":", 1)[0]
-    if host in KNOWN_OFFICIAL_HOSTS or host.endswith(".gob.cl"):
+    searchable = f"{parsed.path}?{parsed.query}".lower()
+    official_host = host in KNOWN_OFFICIAL_HOSTS or host.endswith(".gob.cl")
+
+    # PDFs are valuable but expensive/noisy. Only auto-add them when their URL
+    # itself signals a case-relevant official document.
+    if path.endswith(".pdf"):
+        return bool((official_host or host == parent_host) and any(term in searchable for term in OFFICIAL_PATH_TERMS))
+
+    if official_host:
         return True
     if host == parent_host:
-        searchable = f"{parsed.path}?{parsed.query}".lower()
         return any(term in searchable for term in OFFICIAL_PATH_TERMS)
     return False
 
