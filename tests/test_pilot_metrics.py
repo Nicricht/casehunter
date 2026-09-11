@@ -4,7 +4,7 @@ from pathlib import Path
 
 from casehunter.database import init_db, transaction, utc_now
 from casehunter.pilot_metrics import list_pilot_metrics, pilot_funnel, start_pilot
-from casehunter.repository import import_candidate, update_case_status
+from casehunter.repository import add_timeline_event, import_candidate, update_case_status
 
 
 def candidate(name="ALEMBIC PHARMACEUTICALS SPA"):
@@ -56,6 +56,9 @@ class PilotMetricsTests(unittest.TestCase):
         started = start_pilot(case["id"], "Empresa aceptó seguimiento del caso", self.db)
         self.assertEqual(started["stage"], "ACTIVE_PILOT")
         self.assertGreaterEqual(started["pilot_score"], 75)
+        self.assertEqual(started["tracked_amount_clp"], 5178271)
+        self.assertEqual(started["public_changes"], 0)
+        self.assertFalse(started["has_measurable_result"])
 
         again = start_pilot(case["id"], db_path=self.db)
         self.assertEqual(again["stage"], "ACTIVE_PILOT")
@@ -66,12 +69,32 @@ class PilotMetricsTests(unittest.TestCase):
             ).fetchone()["n"]
         self.assertEqual(count, 1)
 
+    def test_public_change_becomes_measurable_pilot_result(self):
+        case = self._case_with_reply()
+        start_pilot(case["id"], db_path=self.db)
+        add_timeline_event(
+            case["id"],
+            title="Cambio público detectado: PAYMENT_COMMITMENT",
+            details="Compromiso de pago para el 20 de septiembre",
+            event_type="PUBLIC_WATCH_CHANGE",
+            event_date="2026-09-12",
+            source_url="https://example.test/change",
+            db_path=self.db,
+        )
+        row = list_pilot_metrics(db_path=self.db)[0]
+        self.assertEqual(row["public_changes"], 1)
+        self.assertTrue(row["has_measurable_result"])
+        funnel = pilot_funnel(db_path=self.db)
+        self.assertEqual(funnel["tracked_amount_clp_active_pilots"], 5178271)
+        self.assertEqual(funnel["public_changes_active_pilots"], 1)
+
     def test_resolved_case_is_final_stage(self):
         case = self._case_with_reply()
         start_pilot(case["id"], db_path=self.db)
         update_case_status(case["id"], "RESOLVED", self.db)
         row = list_pilot_metrics(db_path=self.db)[0]
         self.assertEqual(row["stage"], "RESOLVED")
+        self.assertTrue(row["has_measurable_result"])
         funnel = pilot_funnel(db_path=self.db)
         self.assertEqual(funnel["resolved"], 1)
 
