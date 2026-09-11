@@ -1,8 +1,11 @@
 from html.parser import HTMLParser
+from io import BytesIO
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 import time
+
+from pypdf import PdfReader
 
 
 class VisibleTextParser(HTMLParser):
@@ -145,7 +148,39 @@ def html_links(html: str, base_url: str):
     return list(dict.fromkeys(parser.links))
 
 
-def fetch_public_document(url: str, timeout: int = 20, retries: int = 2, max_bytes: int = 5_000_000):
+def extract_pdf_text(raw: bytes, max_pages: int = 200, max_chars: int = 1_000_000) -> str:
+    if not raw:
+        raise ValueError("El PDF está vacío.")
+    reader = PdfReader(BytesIO(raw), strict=False)
+    if reader.is_encrypted:
+        try:
+            unlocked = reader.decrypt("")
+        except Exception as exc:
+            raise ValueError("El PDF está cifrado y no puede procesarse automáticamente.") from exc
+        if not unlocked:
+            raise ValueError("El PDF está cifrado y requiere contraseña.")
+    if len(reader.pages) > max_pages:
+        raise ValueError(f"El PDF supera el límite de {max_pages} páginas")
+
+    parts = []
+    total = 0
+    for page in reader.pages:
+        text = (page.extract_text() or "").strip()
+        if not text:
+            continue
+        remaining = max_chars - total
+        if remaining <= 0:
+            break
+        chunk = text[:remaining]
+        parts.append(chunk)
+        total += len(chunk)
+    result = "\n".join(parts).strip()
+    if not result:
+        raise ValueError("El PDF no contiene texto nativo extraíble. Puede requerir OCR.")
+    return result
+
+
+def fetch_public_document(url: str, timeout: int = 20, retries: int = 2, max_bytes: int = 10_000_000):
     if not url.lower().startswith(("http://", "https://")):
         raise ValueError("La fuente debe comenzar con http:// o https://")
 
@@ -155,7 +190,7 @@ def fetch_public_document(url: str, timeout: int = 20, retries: int = 2, max_byt
             url,
             headers={
                 "User-Agent": "Mozilla/5.0 (compatible; CaseHunter/1.0; public-source-research)",
-                "Accept": "text/html,text/plain;q=0.9,*/*;q=0.1",
+                "Accept": "text/html,application/pdf,text/plain;q=0.9,*/*;q=0.1",
             },
         )
         try:
@@ -175,10 +210,19 @@ def fetch_public_document(url: str, timeout: int = 20, retries: int = 2, max_byt
     else:
         raise OSError(f"No se pudo descargar {url}: {last_error}")
 
+    if content_type == "application/pdf":
+        text = extract_pdf_text(raw)
+        return {
+            "source_url": final_url,
+            "content_type": content_type,
+            "text": text,
+            "raw_html": None,
+        }
+
     if content_type not in {"text/html", "text/plain"}:
         raise ValueError(
             f"Tipo de contenido no soportado: {content_type}. "
-            "Use una página HTML o texto público."
+            "Use una página HTML, texto público o PDF con texto nativo."
         )
 
     decoded = raw.decode(charset, errors="replace")
