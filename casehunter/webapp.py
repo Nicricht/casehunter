@@ -32,6 +32,7 @@ from .schemas import (ActionCreate, ActionUpdate, AutoRunRequest, BlockerUpdate,
 from .resolution_playbook import list_playbooks
 from .resolution_learning import apply_resolution_recommendation, resolution_recommendation
 from .auto_service import auto_status, list_auto_runs, run_auto_cycle
+from .client_routes import register_client_routes
 from .contact_discovery import list_contacts
 from .followup import list_followups, process_due_followups
 from .gmail_service import imap_configured
@@ -55,6 +56,15 @@ def create_app(db_path=None, auth_username=None, auth_password=None):
 
     @app.middleware("http")
     async def optional_basic_auth(request, call_next):
+        path = request.url.path
+        client_public = (
+            path == "/client"
+            or path.startswith("/api/client/")
+            or path in {"/static/client.js", "/static/client.css"}
+        )
+        if client_public:
+            return await call_next(request)
+
         username = app.state.auth_username
         password = app.state.auth_password
         if not username or not password:
@@ -73,6 +83,7 @@ def create_app(db_path=None, auth_username=None, auth_password=None):
         return await call_next(request)
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    register_client_routes(app, STATIC_DIR)
 
     @app.get("/")
     def index():
