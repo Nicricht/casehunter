@@ -11,30 +11,54 @@
     <aside class="sidebar">
       <div class="brand">
         <div class="brand-mark">CH</div>
-        <div><strong>Case Hunter</strong><span>Auto</span></div>
+        <div><strong>Case Hunter</strong><span>Resolve</span></div>
       </div>
       <nav id="nav">
-        <button data-view="dashboard" class="active">Resumen</button>
+        <button data-view="dashboard" class="active">Command Center</button>
         <button data-view="cases">Casos</button>
         <button data-view="companies">Empresas</button>
         <button data-view="scan">Descubrir</button>
         <button data-view="auto">Auto</button>
       </nav>
-      <div class="sidebar-foot">Detección · contacto · respuesta · seguimiento</div>
+      <div class="sidebar-foot">Detectar · vigilar · aprender · resolver</div>
     </aside>
 
     <main class="main">
       <header class="topbar">
         <div>
-          <h1 id="page-title">Resumen</h1>
-          <p id="page-subtitle">Contratos detectados, bloqueos y próximas acciones.</p>
+          <h1 id="page-title">Pilot Command Center</h1>
+          <p id="page-subtitle">Cartera, señales públicas y próximas acciones en una sola vista.</p>
         </div>
         <div id="health" class="health">Comprobando sistema…</div>
       </header>
 
       <section id="view-dashboard" class="view active">
-        <div id="metrics" class="metrics"></div>
-        <div class="grid two">
+        <div id="metrics" class="metrics command-metrics"></div>
+
+        <article class="card command-card">
+          <div class="card-head command-head">
+            <div>
+              <div class="eyebrow">PILOTO PRIORITARIO</div>
+              <h2>Pilot Command Center</h2>
+              <p class="muted">Estado, monto, bloqueo, señales y recomendación basada en precedentes.</p>
+            </div>
+            <button id="command-refresh" class="secondary">Actualizar inteligencia</button>
+          </div>
+          <div id="pilot-command"></div>
+        </article>
+
+        <div class="grid two dashboard-row">
+          <article class="card">
+            <div class="card-head"><div><div class="eyebrow">CARTERA</div><h2>Portafolios bajo seguimiento</h2></div></div>
+            <div id="portfolio-command"></div>
+          </article>
+          <article class="card">
+            <div class="card-head"><div><div class="eyebrow">FUNNEL</div><h2>Validación comercial</h2></div></div>
+            <div id="pilot-funnel"></div>
+          </article>
+        </div>
+
+        <div class="grid two dashboard-row">
           <article class="card">
             <div class="card-head"><h2>Casos prioritarios</h2><button class="link-button" data-view-link="cases">Ver todos</button></div>
             <div id="priority-cases"></div>
