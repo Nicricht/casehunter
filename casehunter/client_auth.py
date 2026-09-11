@@ -14,6 +14,42 @@ MAX_FAILED_ATTEMPTS = 5
 LOCK_MINUTES = 15
 VALID_ROLES = {"VIEWER", "OWNER"}
 
+CLIENT_AUTH_SCHEMA = """
+CREATE TABLE IF NOT EXISTS client_users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'VIEWER',
+    status TEXT NOT NULL DEFAULT 'ACTIVE',
+    failed_attempts INTEGER NOT NULL DEFAULT 0,
+    locked_until TEXT,
+    last_login_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS client_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id BIGINT NOT NULL REFERENCES client_users(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    revoked_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_client_users_company ON client_users(company_id);
+CREATE INDEX IF NOT EXISTS idx_client_users_status ON client_users(status);
+CREATE INDEX IF NOT EXISTS idx_client_sessions_token ON client_sessions(token_hash);
+CREATE INDEX IF NOT EXISTS idx_client_sessions_user ON client_sessions(user_id);
+"""
+
+
+def _ensure_schema(db_path=None):
+    with transaction(db_path) as conn:
+        conn.executescript(CLIENT_AUTH_SCHEMA)
+
 
 def _b64(data):
     return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
@@ -71,6 +107,7 @@ def _public_user(row):
 
 
 def create_client_user(company_id, email, password, role="VIEWER", db_path=None):
+    _ensure_schema(db_path)
     company_id = int(company_id)
     email = _normalize_email(email)
     role = str(role or "VIEWER").strip().upper()
@@ -86,18 +123,18 @@ def create_client_user(company_id, email, password, role="VIEWER", db_path=None)
         existing = conn.execute("SELECT id FROM client_users WHERE email=?", (email,)).fetchone()
         if existing:
             raise ValueError("Ya existe una cuenta con ese correo")
-        cur = conn.execute(
+        conn.execute(
             """INSERT INTO client_users(
                    company_id,email,password_hash,role,status,failed_attempts,locked_until,last_login_at,created_at,updated_at
                ) VALUES(?,?,?,?,'ACTIVE',0,NULL,NULL,?,?)""",
             (company_id, email, password_hash, role, now, now),
         )
-        user_id = cur.lastrowid
-        row = conn.execute("SELECT * FROM client_users WHERE id=?", (user_id,)).fetchone()
+        row = conn.execute("SELECT * FROM client_users WHERE email=?", (email,)).fetchone()
     return _public_user(row)
 
 
 def list_client_users(db_path=None):
+    _ensure_schema(db_path)
     with transaction(db_path) as conn:
         rows = conn.execute(
             """SELECT u.*,c.name company_name
@@ -113,6 +150,7 @@ def list_client_users(db_path=None):
 
 
 def set_client_user_status(user_id, status, db_path=None):
+    _ensure_schema(db_path)
     status = str(status or "").strip().upper()
     if status not in {"ACTIVE", "DISABLED"}:
         raise ValueError("Estado de cuenta no válido")
@@ -132,6 +170,7 @@ def set_client_user_status(user_id, status, db_path=None):
 
 
 def reset_client_password(user_id, password, db_path=None):
+    _ensure_schema(db_path)
     password_hash = hash_password(password)
     now = utc_now()
     with transaction(db_path) as conn:
@@ -161,6 +200,7 @@ def _parse_time(value):
 
 
 def authenticate_client(email, password, db_path=None):
+    _ensure_schema(db_path)
     email = _normalize_email(email)
     now = datetime.now(timezone.utc)
     with transaction(db_path) as conn:
@@ -201,6 +241,7 @@ def _token_hash(token):
 
 
 def create_client_session(user_id, db_path=None, ttl_days=SESSION_TTL_DAYS):
+    _ensure_schema(db_path)
     token = secrets.token_urlsafe(32)
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(days=max(1, int(ttl_days)))
@@ -218,6 +259,7 @@ def create_client_session(user_id, db_path=None, ttl_days=SESSION_TTL_DAYS):
 
 
 def get_client_session(token, db_path=None):
+    _ensure_schema(db_path)
     if not token:
         return None
     now = datetime.now(timezone.utc)
@@ -250,6 +292,7 @@ def get_client_session(token, db_path=None):
 
 
 def revoke_client_session(token, db_path=None):
+    _ensure_schema(db_path)
     if not token:
         return False
     now = utc_now()
