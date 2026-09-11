@@ -35,6 +35,9 @@ RULES = {
         "pago pendiente",
         "estado de pago",
         "factura pendiente",
+        "facturas pendientes",
+        "facturas vencidas",
+        "deuda vencida",
         "pendiente de pago",
         "pendientes de pago",
         "pagos pendientes",
@@ -90,10 +93,12 @@ RULES = {
     ],
 }
 
+
 def normalize_text(text: str) -> str:
     text = text.lower()
     normalized = unicodedata.normalize("NFD", text)
     return "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn")
+
 
 def detect_problems(text: str):
     normalized = normalize_text(text)
