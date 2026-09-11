@@ -32,6 +32,7 @@ from .schemas import (ActionCreate, ActionUpdate, AutoRunRequest, BlockerUpdate,
 from .resolution_playbook import list_playbooks
 from .resolution_learning import apply_resolution_recommendation, resolution_recommendation
 from .auto_service import auto_status, list_auto_runs, run_auto_cycle
+from .client_auth import list_client_users
 from .client_routes import register_client_routes
 from .contact_discovery import list_contacts
 from .followup import list_followups, process_due_followups
@@ -68,6 +69,12 @@ def create_app(db_path=None, auth_username=None, auth_password=None):
         username = app.state.auth_username
         password = app.state.auth_password
         if not username or not password:
+            try:
+                client_accounts = list_client_users(app.state.db_path)
+            except Exception:
+                return Response(status_code=503, content="Admin authentication state unavailable")
+            if client_accounts:
+                return Response(status_code=503, content="Admin authentication must be configured when client accounts exist")
             return await call_next(request)
         header = request.headers.get("Authorization", "")
         valid = False
