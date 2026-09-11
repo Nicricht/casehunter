@@ -75,8 +75,30 @@ def _find_or_create_company(config, db_path=None):
     return create_company(config["canonical_name"], db_path=db_path)
 
 
+def _link_existing_matching_cases(company, aliases, db_path=None):
+    """Attach already-detected cases to the canonical portfolio identity.
+
+    A pilot often starts before the company entity exists. Only cases whose
+    detected company name matches an explicit registered alias are backfilled;
+    text-only guesses are deliberately not used here.
+    """
+    with transaction(db_path) as conn:
+        rows = conn.execute(
+            """SELECT id,detected_company_name FROM cases
+               WHERE company_id IS NULL AND detected_company_name IS NOT NULL"""
+        ).fetchall()
+    linked = 0
+    for row in rows:
+        if not company_matches(row["detected_company_name"], aliases):
+            continue
+        link_case_company(int(row["id"]), int(company["id"]), db_path)
+        linked += 1
+    return linked
+
+
 def _cancel_resolved_actions(case_id, db_path=None):
     now = utc_now()
+    event_date = now[:10]
     with transaction(db_path) as conn:
         conn.execute(
             "UPDATE actions SET status='CANCELLED' WHERE case_id=? AND status='TODO'",
@@ -93,8 +115,8 @@ def _cancel_resolved_actions(case_id, db_path=None):
         if not exists:
             conn.execute(
                 """INSERT INTO timeline_events(case_id,event_type,event_date,title,details,created_at)
-                   VALUES(?,'PUBLIC_PRECEDENT_RESOLVED',substr(?,1,10),'Antecedente público resuelto',?,?)""",
-                (int(case_id), now, "Se conserva como precedente de resolución y no como caso de cobranza activo.", now),
+                   VALUES(?,'PUBLIC_PRECEDENT_RESOLVED',?,'Antecedente público resuelto',?,?)""",
+                (int(case_id), event_date, "Se conserva como precedente de resolución y no como caso de cobranza activo.", now),
             )
 
 
@@ -126,6 +148,7 @@ def scan_registered_portfolio(portfolio_key, db_path=None, scanner=None, max_pag
 
     company = _find_or_create_company(config, db_path)
     aliases = tuple(config["aliases"]) + (config["canonical_name"],)
+    linked_existing = _link_existing_matching_cases(company, aliases, db_path)
     run_scan = scanner or scan_ley_lobby_listing
     matched = 0
     created = 0
@@ -175,6 +198,7 @@ def scan_registered_portfolio(portfolio_key, db_path=None, scanner=None, max_pag
         "canonical_name": config["canonical_name"],
         "sources_scanned": scanned_sources,
         "matched_candidates": matched,
+        "linked_existing": linked_existing,
         "created": created,
         "updated": updated,
         "errors": errors,
