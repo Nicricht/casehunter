@@ -6,6 +6,7 @@ from .database import row_to_dict, transaction, utc_now
 from .engines.reply_intelligence import REPLY_CLASSES, analyze_reply, classify_reply
 from .gmail_service import fetch_replies, fetch_sent_messages, imap_configured
 from .pilot_metrics import start_pilot
+from .public_watch import run_active_watches
 from .repository import add_timeline_event, create_action, update_case_status
 
 
@@ -213,9 +214,10 @@ def ingest_reply(reply, db_path=None):
 
 def sync_replies(db_path=None):
     if not imap_configured():
+        watch = run_active_watches(db_path=db_path)
         return {
             "configured": False, "checked": 0, "created": 0, "classifications": {},
-            "manual_outreach_imported": 0,
+            "manual_outreach_imported": 0, "public_watch": watch,
         }
 
     manual = sync_manual_outreach(db_path)
@@ -236,6 +238,8 @@ def sync_replies(db_path=None):
             created += 1
             label = result["reply"]["classification"]
             classes[label] = classes.get(label, 0) + 1
+
+    watch = run_active_watches(db_path=db_path)
     return {
         "configured": True,
         "checked": len(incoming),
@@ -244,4 +248,5 @@ def sync_replies(db_path=None):
         "manual_outreach_checked": manual["checked"],
         "manual_outreach_imported": manual["imported"],
         "manual_targets_ambiguous": manual["ambiguous"],
+        "public_watch": watch,
     }
