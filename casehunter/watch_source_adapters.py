@@ -23,14 +23,14 @@ OFFICIAL_PATH_TERMS = (
     "resoluc",
     "acta",
     "proveedor",
-    "pago",
     "factura",
     "finanza",
     "tesorer",
     "presupuesto",
-    "compra",
     "contrato",
 )
+
+SKIPPED_EXTENSIONS = (".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip")
 
 
 def source_kind(source_url):
@@ -93,6 +93,8 @@ def _canonical_order_text(order):
 def _same_host_or_official(candidate_url, parent_url):
     parsed = urlparse(str(candidate_url or ""))
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+    if parsed.path.lower().endswith(SKIPPED_EXTENSIONS):
         return False
     host = parsed.netloc.lower().split(":", 1)[0]
     parent_host = urlparse(str(parent_url or "")).netloc.lower().split(":", 1)[0]
