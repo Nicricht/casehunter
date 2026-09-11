@@ -3,7 +3,7 @@ import imaplib
 import re
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
-from email.utils import parseaddr
+from email.utils import parseaddr, parsedate_to_datetime
 
 from .config import IMAP_HOST, IMAP_PASSWORD, IMAP_PORT, IMAP_USERNAME
 
@@ -46,6 +46,18 @@ def _normalize_subject(subject):
         text = cleaned
 
 
+def _date_iso(value):
+    if not value:
+        return None
+    try:
+        parsed = parsedate_to_datetime(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.isoformat()
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 def _connect():
     if not imap_configured():
         raise RuntimeError("Gmail/IMAP no configurado")
@@ -82,6 +94,60 @@ def was_recipient_contacted(recipient_email):
             return False
         status, data = client.search(None, "TO", f'"{address}"')
         return bool(status == "OK" and data and data[0].split())
+    finally:
+        try:
+            client.logout()
+        except Exception:
+            pass
+
+
+def fetch_sent_messages(targets, since_days=45, max_messages_per_contact=20):
+    """Read manually-sent Gmail messages only for unambiguous known case contacts.
+
+    Targets must already be resolved to one case by the caller. This function does
+    not guess company identity from domains or message text.
+    """
+    if not imap_configured() or not targets:
+        return []
+    client = _connect()
+    results = []
+    seen_ids = set()
+    try:
+        mailbox = _mailbox_with_flag(client, "\\Sent", "[Gmail]/Sent Mail")
+        status, _ = client.select(f'"{mailbox}"', readonly=True)
+        if status != "OK":
+            return []
+        since = (datetime.now(timezone.utc) - timedelta(days=max(1, int(since_days)))).strftime("%d-%b-%Y")
+        for target in targets:
+            recipient = (target.get("email") or "").strip().lower()
+            if not recipient:
+                continue
+            status, data = client.search(None, "SINCE", since, "TO", f'"{recipient}"')
+            if status != "OK" or not data:
+                continue
+            ids = data[0].split()[-max(1, int(max_messages_per_contact)):]
+            for msg_num in ids:
+                status, payload = client.fetch(msg_num, "(RFC822)")
+                if status != "OK" or not payload:
+                    continue
+                raw = next((item[1] for item in payload if isinstance(item, tuple) and len(item) > 1), None)
+                if not raw:
+                    continue
+                message = email.message_from_bytes(raw)
+                message_id = (message.get("Message-ID") or f"imap-sent:{msg_num.decode(errors='ignore')}").strip()
+                if message_id in seen_ids:
+                    continue
+                seen_ids.add(message_id)
+                results.append({
+                    "case_id": int(target["case_id"]),
+                    "contact_id": target.get("contact_id"),
+                    "recipient_email": recipient,
+                    "provider_message_id": message_id,
+                    "subject": _decode_header(message.get("Subject")) or "Correo Gmail importado",
+                    "body": _plain_text(message).strip(),
+                    "sent_at": _date_iso(message.get("Date")),
+                })
+        return results
     finally:
         try:
             client.logout()
@@ -135,7 +201,7 @@ def fetch_replies(messages, since_days=45, max_messages_per_contact=20):
                     "sender_email": parseaddr(message.get("From") or "")[1].lower() or recipient,
                     "subject": _decode_header(message.get("Subject")),
                     "body": _plain_text(message).strip(),
-                    "received_at": message.get("Date") or None,
+                    "received_at": _date_iso(message.get("Date")) or message.get("Date") or None,
                 })
         return results
     finally:
