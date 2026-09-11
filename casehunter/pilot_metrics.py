@@ -1,4 +1,7 @@
+from datetime import date
+
 from .database import row_to_dict, transaction
+from .repository import add_timeline_event
 
 
 PILOT_STAGES = (
@@ -86,6 +89,37 @@ def list_pilot_metrics(limit=100, db_path=None):
         result.append(row)
     result.sort(key=lambda row: (row["pilot_score"], row.get("financial_priority") or 0), reverse=True)
     return result
+
+
+def get_pilot_metric(case_id, db_path=None):
+    case_id = int(case_id)
+    rows = list_pilot_metrics(limit=500, db_path=db_path)
+    for row in rows:
+        if int(row["case_id"]) == case_id:
+            return row
+    raise KeyError("Caso no encontrado")
+
+
+def start_pilot(case_id, note=None, db_path=None):
+    case_id = int(case_id)
+    with transaction(db_path) as conn:
+        exists = conn.execute("SELECT id FROM cases WHERE id=?", (case_id,)).fetchone()
+        if exists is None:
+            raise KeyError("Caso no encontrado")
+        already = conn.execute(
+            "SELECT id FROM timeline_events WHERE case_id=? AND event_type='PILOT_STARTED' ORDER BY id DESC LIMIT 1",
+            (case_id,),
+        ).fetchone()
+    if not already:
+        add_timeline_event(
+            case_id,
+            title="Piloto de seguimiento iniciado",
+            details=(note or "").strip() or "La empresa aceptó seguimiento activo del caso.",
+            event_type="PILOT_STARTED",
+            event_date=date.today().isoformat(),
+            db_path=db_path,
+        )
+    return get_pilot_metric(case_id, db_path=db_path)
 
 
 def pilot_funnel(limit=500, db_path=None):
