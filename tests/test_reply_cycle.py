@@ -50,6 +50,12 @@ class ReplyCycleTests(unittest.TestCase):
         self.assertEqual(classify_reply("Gracias, ya está resuelto"), "RESOLVED")
         self.assertEqual(classify_reply("No nos interesa, gracias"), "NOT_INTERESTED")
 
+    def test_classifier_detects_agency_no_response(self):
+        self.assertEqual(
+            classify_reply("Después del 28/07 no hemos recibido más información y el correo del 26/08 quedó sin respuesta."),
+            "NO_AGENCY_RESPONSE",
+        )
+
     def test_sent_message_schedules_followup(self):
         sent = self._sent_outreach()
         self.assertEqual(sent["status"], "SENT")
@@ -74,6 +80,19 @@ class ReplyCycleTests(unittest.TestCase):
         self.assertEqual(get_case(self.case["id"], self.db)["status"], "VALIDATING")
         self.assertEqual(list_followups(db_path=self.db)[0]["status"], "CANCELLED")
         self.assertEqual(len(list_replies(case_id=self.case["id"], db_path=self.db)), 1)
+
+    def test_no_agency_response_marks_blocker_identified(self):
+        sent = self._sent_outreach()
+        result = ingest_reply({
+            "outreach_id": sent["id"],
+            "case_id": self.case["id"],
+            "provider_message_id": "<reply-no-response@example.test>",
+            "sender_email": "contacto@empresa.cl",
+            "subject": "Re: antecedentes",
+            "body": "No hemos recibido más información del municipio y nuestro correo quedó sin respuesta.",
+        }, db_path=self.db)
+        self.assertEqual(result["reply"]["classification"], "NO_AGENCY_RESPONSE")
+        self.assertEqual(get_case(self.case["id"], self.db)["status"], "BLOCKER_IDENTIFIED")
 
     def test_resolved_reply_closes_case(self):
         sent = self._sent_outreach()
