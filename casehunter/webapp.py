@@ -30,6 +30,7 @@ from .scanner_service import list_scans, run_ley_lobby_scan, run_mercado_publico
 from .schemas import (ActionCreate, ActionUpdate, AutoRunRequest, BlockerUpdate, CompanyCreate, CompanyLink, DocumentUpdate,
     OutreachApprove, OutreachRecipientUpdate, ScanRequest, StatusUpdate, TimelineCreate, MercadoPublicoSyncRequest)
 from .resolution_playbook import list_playbooks
+from .resolution_learning import apply_resolution_recommendation, resolution_recommendation
 from .auto_service import auto_status, list_auto_runs, run_auto_cycle
 from .contact_discovery import list_contacts
 from .followup import list_followups, process_due_followups
@@ -148,6 +149,20 @@ def create_app(db_path=None, auth_username=None, auth_password=None):
     def get_case_detail(case_id: int):
         try:
             return get_case(case_id, app.state.db_path)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/cases/{case_id}/recommendation")
+    def get_case_recommendation(case_id: int):
+        try:
+            return resolution_recommendation(case_id, app.state.db_path)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/cases/{case_id}/recommendation/apply")
+    def post_case_recommendation(case_id: int, min_confidence: int = Query(default=55, ge=0, le=100)):
+        try:
+            return apply_resolution_recommendation(case_id, app.state.db_path, min_confidence=min_confidence)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
