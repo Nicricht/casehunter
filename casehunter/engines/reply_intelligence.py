@@ -6,6 +6,7 @@ REPLY_CLASSES = {
     "REQUESTS_INFO",
     "STILL_PENDING",
     "NO_AGENCY_RESPONSE",
+    "PILOT_REQUESTED",
     "RESOLVED",
     "NOT_INTERESTED",
     "NEGATIVE",
@@ -45,6 +46,15 @@ PHRASES = {
         "no nos interesa", "no me interesa", "no estamos interesados", "no gracias", "no enviar",
         "no nos contacte", "no me contacte", "favor no contactar",
     ],
+    "PILOT_REQUESTED": [
+        "seguirá realizando seguimiento", "seguira realizando seguimiento",
+        "seguirá haciendo seguimiento", "seguira haciendo seguimiento",
+        "seguir realizando seguimiento del caso", "seguir haciendo seguimiento del caso",
+        "puede seguir haciendo seguimiento", "puede continuar con el seguimiento",
+        "continúe con el seguimiento", "continue con el seguimiento", "mantenga seguimiento",
+        "mantener seguimiento del caso", "seguir monitoreando el caso", "continúe monitoreando",
+        "continue monitoreando",
+    ],
     "REQUESTS_INFO": [
         "envíamela", "enviamela", "envíemela", "enviemela", "envíenosla", "envienosla",
         "puede enviar", "puedes enviar", "mándamela", "mandamela", "comparta la información",
@@ -68,6 +78,7 @@ def _classification(text):
         "NO_AGENCY_RESPONSE",
         "STILL_PENDING",
         "NOT_INTERESTED",
+        "PILOT_REQUESTED",
         "REQUESTS_INFO",
         "NEGATIVE",
         "POSITIVE",
@@ -104,6 +115,14 @@ def analyze_reply(text):
             "BLOCKER_IDENTIFIED",
             "ESCALATE_RESPONSIBLE_UNIT",
             "Identificar la unidad responsable y escalar el seguimiento solicitando folio, estado y fecha de respuesta",
+        )
+    if classification == "PILOT_REQUESTED":
+        return ReplyDecision(
+            classification,
+            confidence,
+            "FOLLOW_UP",
+            "WATCH_PUBLIC_CASE",
+            "Mantener vigilancia activa del caso y reportar únicamente cambios relevantes",
         )
     if classification == "RESOLVED":
         return ReplyDecision(classification, confidence, "RESOLVED", None, None, True)
