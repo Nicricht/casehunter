@@ -80,6 +80,18 @@ def purchase_orders_by_provider_date(provider_code, when, ticket=None):
     return listing if isinstance(listing, list) else []
 
 
+def purchase_order_by_code(code, ticket=None):
+    clean = " ".join(str(code or "").split()).strip()
+    if not clean:
+        raise ValueError("El código de orden de compra es obligatorio")
+    params = urlencode({"codigo": clean, "ticket": _ticket(ticket)})
+    data = _get_json(f"{BASE}/ordenesdecompra.json?{params}")
+    listing = data.get("Listado", []) if isinstance(data, dict) else []
+    if isinstance(listing, list) and listing:
+        return listing[0]
+    raise ValueError(f"Mercado Público no devolvió la orden de compra {clean}")
+
+
 def _problem_for_order(order):
     try:
         code = int(order.get("CodigoEstado"))
