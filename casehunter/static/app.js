@@ -2,6 +2,17 @@ const state = { config: {}, cases: [], companies: [], playbooks: [] };
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const money = value => new Intl.NumberFormat('es-CL', {style:'currency', currency:'CLP', maximumFractionDigits:0}).format(Number(value || 0));
+const pct = value => `${Math.round(Number(value || 0) * 100)}%`;
+const caseName = c => c.company_name || c.detected_company_name || 'Empresa por confirmar';
+
+function safeUrl(value) {
+  try {
+    const parsed = new URL(String(value || ''), window.location.origin);
+    return ['http:', 'https:'].includes(parsed.protocol) ? esc(parsed.href) : '#';
+  } catch (_) {
+    return '#';
+  }
+}
 
 async function api(path, options = {}) {
   const response = await fetch(path, {headers:{'Content-Type':'application/json', ...(options.headers || {})}, ...options});
@@ -24,19 +35,17 @@ function setView(view) {
   $(`view-${view}`)?.classList.add('active');
   document.querySelector(`#nav button[data-view="${view}"]`)?.classList.add('active');
   const titles = {
-    dashboard:['Resumen','Contratos detectados, bloqueos y próximas acciones.'],
+    dashboard:['Pilot Command Center','Cartera, señales públicas y próximas acciones en una sola vista.'],
     cases:['Casos','De la señal pública al cierre administrativo.'],
     companies:['Empresas','Relaciona proveedores con los casos detectados.'],
     scan:['Descubrir','Convierte fuentes públicas en casos accionables.'],
     auto:['Auto','Detección, contacto, respuesta y seguimiento en un solo ciclo.'],
-    detail:['Detalle del caso','Diagnóstico, documentos, acciones y línea de tiempo.'],
+    detail:['Detalle del caso','Diagnóstico, evidencia, acciones y recomendación por precedentes.'],
   };
   const t = titles[view] || titles.dashboard;
   $('page-title').textContent = t[0];
   $('page-subtitle').textContent = t[1];
 }
-
-const caseName = c => c.company_name || c.detected_company_name || 'Empresa por confirmar';
 
 async function loadHealth() {
   try {
@@ -47,16 +56,108 @@ async function loadHealth() {
   }
 }
 
+function pilotBadge(stage) {
+  const cls = stage === 'RESOLVED' ? 'resolved' : stage === 'ACTIVE_PILOT' ? 'follow' : stage === 'PROBLEM_CONFIRMED' ? 'medium' : '';
+  return `<span class="badge ${cls}">${esc(stage || 'SIN ETAPA')}</span>`;
+}
+
+function recommendationHtml(result, caseId, compact = false) {
+  if (!result || result.status !== 'READY' || !result.recommendation) {
+    const message = result?.causality_notice || 'Todavía no existen suficientes precedentes resueltos comparables.';
+    return `<div class="rec-card empty-rec"><div class="eyebrow">PRÓXIMA ACCIÓN RECOMENDADA</div><div class="rec-title">Esperando más evidencia</div><p class="muted">${esc(message)}</p><div class="rec-actions"><button class="secondary recommendation-case" data-case="${caseId}">Ver caso</button></div></div>`;
+  }
+  const r = result.recommendation;
+  const evidence = (r.evidence || []).slice(0, compact ? 2 : 5).map(item => {
+    const link = safeUrl(item.source_url);
+    const source = link === '#' ? '' : `<a href="${link}" target="_blank" rel="noopener">Fuente</a>`;
+    return `<div class="evidence-item"><strong>Caso #${esc(item.case_id)}</strong> · ${esc(item.basis || 'evidencia')}<br>${esc(item.evidence || '')}${source ? `<br>${source}` : ''}</div>`;
+  }).join('');
+  return `<div class="rec-card"><div class="eyebrow">PRÓXIMA ACCIÓN RECOMENDADA</div><div class="rec-title">${esc(r.title)}</div><p class="muted">${esc(r.rationale || '')}</p><div class="rec-confidence"><strong>${Number(r.confidence || 0)}%</strong><div class="confidence-bar"><div class="confidence-fill" style="width:${Math.max(0, Math.min(100, Number(r.confidence || 0)))}%"></div></div><span class="muted">${Number(r.precedent_count || 0)} precedente(s)</span></div>${evidence ? `<div class="evidence-list">${evidence}</div>` : ''}<div class="causality-note">${esc(result.causality_notice || '')}</div><div class="rec-actions"><button class="recommendation-apply" data-case="${caseId}">Aplicar acción</button><button class="secondary recommendation-case" data-case="${caseId}">Ver caso</button></div></div>`;
+}
+
+function bindRecommendationActions() {
+  document.querySelectorAll('.recommendation-case').forEach(btn => btn.onclick = () => openCase(Number(btn.dataset.case)));
+  document.querySelectorAll('.recommendation-apply').forEach(btn => btn.onclick = async () => {
+    const caseId = Number(btn.dataset.case);
+    btn.disabled = true;
+    try {
+      const result = await api(`/api/cases/${caseId}/recommendation/apply`, {method:'POST'});
+      if (result.materialized) toast('Recomendación convertida en acción');
+      else if (result.materialization_reason === 'equivalent_action_already_open') toast('La acción equivalente ya está abierta');
+      else if (result.materialization_reason === 'confidence_below_threshold') toast('Confianza insuficiente para aplicar automáticamente');
+      else toast('No había una recomendación aplicable');
+      await loadDashboard();
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
+function renderPilotFunnel(funnel) {
+  const counts = funnel?.counts || {};
+  const stages = [
+    ['DETECTED','Detectados'],['CONTACTED','Contactados'],['ENGAGED','Respondieron'],
+    ['PROBLEM_CONFIRMED','Problema confirmado'],['ACTIVE_PILOT','Piloto activo'],['RESOLVED','Resueltos'],
+  ];
+  const max = Math.max(1, ...stages.map(([key]) => Number(counts[key] || 0)));
+  return stages.map(([key,label]) => `<div class="funnel-row"><div><div class="list-title">${label}</div><div class="funnel-track"><div class="funnel-fill" style="width:${Math.max(3, Math.round((Number(counts[key] || 0) / max) * 100))}%"></div></div></div><strong>${Number(counts[key] || 0)}</strong></div>`).join('');
+}
+
+function renderPortfolios(portfolios) {
+  if (!portfolios?.length) return '<div class="empty">Todavía no hay carteras agrupadas.</div>';
+  return portfolios.slice(0, 6).map(p => {
+    const priority = p.priority_case || {};
+    const next = priority.next_action?.title || 'Sin acción abierta';
+    return `<div class="portfolio-row"><div class="portfolio-title"><div><div class="list-title">${esc(p.company_name)}</div><div class="list-meta">${esc(priority.agency || 'Organismo por confirmar')}</div></div><strong>${money(p.confirmed_public_amount_clp || 0)}</strong></div><div class="portfolio-stats"><span class="stat-pill">${Number(p.open_case_count || 0)} abiertos</span><span class="stat-pill">${Number(p.resolved_case_count || 0)} resueltos</span><span class="stat-pill">prioridad ${Number(p.highest_priority || 0)}</span></div><div class="list-meta">Siguiente: ${esc(next)}</div>${priority.case_id ? `<button class="link-button clickable-case" data-case="${priority.case_id}">Abrir caso prioritario</button>` : ''}</div>`;
+  }).join('');
+}
+
 async function loadDashboard() {
-  const [d, cases] = await Promise.all([api('/api/dashboard'), api('/api/cases')]);
+  const [d, cases, ops, portfolios] = await Promise.all([
+    api('/api/dashboard'),
+    api('/api/cases'),
+    api('/api/operations'),
+    api('/api/portfolios?min_cases=1&active_only=false'),
+  ]);
+  const k = ops.kpis || {};
+  const funnel = ops.pilot_funnel || {counts:{}, rows:[]};
   $('metrics').innerHTML = [
-    ['Casos activos', d.active_cases || 0], ['Resueltos', d.resolved_cases || 0],
-    ['Acciones abiertas', d.open_actions || 0], ['Docs faltantes', d.missing_documents || 0],
-    ['Mayor monto observado', money(d.largest_observed_amount_clp || 0)],
+    ['Pilotos activos', k.pilots_active || 0],
+    ['CLP bajo seguimiento', money(funnel.tracked_amount_clp_active_pilots || 0)],
+    ['Cambios públicos', funnel.public_changes_active_pilots || 0],
+    ['Pilotos resueltos', k.pilot_resolved || 0],
+    ['Tasa de respuesta', pct(k.reply_rate || 0)],
+    ['Acciones abiertas', k.open_actions || 0],
   ].map(([label,value]) => `<div class="metric"><div class="label">${label}</div><div class="value">${value}</div></div>`).join('');
+
+  const rows = funnel.rows || [];
+  const activePilots = rows.filter(row => row.stage === 'ACTIVE_PILOT');
+  const primary = activePilots[0] || rows.find(row => row.stage === 'PROBLEM_CONFIRMED') || null;
+  if (primary) {
+    let detail = null;
+    let recommendation = null;
+    try {
+      [detail, recommendation] = await Promise.all([
+        api(`/api/cases/${primary.case_id}`),
+        api(`/api/cases/${primary.case_id}/recommendation`).catch(() => null),
+      ]);
+    } catch (_) {
+      detail = null;
+    }
+    const latest = detail?.timeline?.find(e => ['PUBLIC_WATCH_CHANGE','COMPANY_REPLY','PILOT_STARTED','RESOLUTION_RECOMMENDATION'].includes(e.event_type)) || detail?.timeline?.[0];
+    $('pilot-command').innerHTML = `<div class="command-layout"><div class="pilot-hero"><div class="pilot-hero-head"><div><div class="pilot-name">${esc(primary.company_name || caseName(detail || {}))}</div><div class="list-meta">Caso #${primary.case_id} · ${esc(detail?.agency || 'Organismo por confirmar')}</div></div>${pilotBadge(primary.stage)}</div><div class="pilot-amount">${money(primary.tracked_amount_clp || 0)}</div><div class="pilot-amount-label">monto público bajo seguimiento en este caso</div><div class="pilot-facts"><div class="pilot-fact"><span>Bloqueo</span><strong>${esc(primary.current_blocker || detail?.current_blocker || 'Por confirmar')}</strong></div><div class="pilot-fact"><span>Días en piloto</span><strong>${Number(primary.pilot_days_active || 0)}</strong></div><div class="pilot-fact"><span>Última señal</span><strong>${esc(latest?.event_date || 'Sin novedad')}</strong></div></div>${latest ? `<div class="notice"><strong>${esc(latest.title || 'Última novedad')}</strong><br><span>${esc((latest.details || '').slice(0,420))}</span></div>` : '<div class="notice">Todavía no hay una señal nueva registrada después del inicio del seguimiento.</div>'}</div>${recommendationHtml(recommendation, primary.case_id, true)}</div>`;
+  } else {
+    $('pilot-command').innerHTML = '<div class="empty">No hay un piloto activo todavía. El Command Center se activará cuando una empresa confirme seguimiento.</div>';
+  }
+
+  $('portfolio-command').innerHTML = renderPortfolios(portfolios);
+  $('pilot-funnel').innerHTML = renderPilotFunnel(funnel);
   $('priority-cases').innerHTML = cases.length ? cases.slice(0,7).map(c => `<div class="list-item clickable-case" data-case="${c.id}"><div class="list-title">${esc(caseName(c))}</div><div class="list-meta">${esc(c.contract_ref || c.external_id)} · prioridad ${c.financial_priority} · ${money(c.largest_amount_clp)}</div></div>`).join('') : '<div class="empty">Todavía no hay casos.</div>';
   $('blockers').innerHTML = d.blockers?.length ? d.blockers.map(b => `<div class="list-item"><div class="list-title">${esc(b.blocker || 'UNKNOWN')}</div><div class="list-meta">${b.count} caso(s)</div></div>`).join('') : '<div class="empty">Sin bloqueos activos.</div>';
   bindCaseLinks();
+  bindRecommendationActions();
 }
 
 async function loadCases() {
@@ -83,7 +184,10 @@ async function loadScans() {
 }
 
 async function openCase(id) {
-  const c = await api(`/api/cases/${id}`);
+  const [c, recommendation] = await Promise.all([
+    api(`/api/cases/${id}`),
+    api(`/api/cases/${id}/recommendation`).catch(() => null),
+  ]);
   setView('detail');
   $('detail-title').innerHTML = `<h2>${esc(caseName(c))}</h2><div class="list-meta">${esc(c.contract_ref || c.external_id)}</div>`;
   const companyOptions = [`<option value="">Sin vincular</option>`, ...state.companies.map(x => `<option value="${x.id}" ${x.id === c.company_id ? 'selected' : ''}>${esc(x.name)}</option>`)].join('');
@@ -93,18 +197,20 @@ async function openCase(id) {
   const pb = c.playbook || {};
   $('case-detail').innerHTML = `<div class="detail-grid"><div class="detail-column">
     <article class="card"><h2>Diagnóstico</h2><dl class="kv"><dt>Bloqueo</dt><dd>${esc(c.current_blocker || 'UNKNOWN')}</dd><dt>Organismo</dt><dd>${esc(c.agency || 'Por confirmar')}</dd><dt>Prioridad</dt><dd>${c.financial_priority}/100</dd></dl></article>
-    <article class="card"><h2>Resolution Playbook</h2><p><strong>${esc(pb.title || '')}</strong></p><p class="muted">${esc(pb.goal || '')}</p>${pb.next_step ? `<div class="notice"><strong>Siguiente acción</strong><br>${esc(pb.next_step.title || '')}</div>` : ''}<button id="apply-playbook">Aplicar playbook</button></article>
+    <article class="card case-recommendation"><h2>Resolution Learning</h2>${recommendationHtml(recommendation, c.id)}</article>
+    <article class="card"><h2>Resolution Playbook</h2><p><strong>${esc(pb.title || '')}</strong></p><p class="muted">${esc(pb.goal || '')}</p>${pb.next_step ? `<div class="notice"><strong>Siguiente acción operativa</strong><br>${esc(pb.next_step.title || '')}</div>` : ''}<button id="apply-playbook">Aplicar playbook</button></article>
     <article class="card"><h2>Acciones</h2>${(c.actions || []).map(a => `<div class="list-item"><strong>${esc(a.title)}</strong><div class="list-meta">${esc(a.status)}${a.due_date ? ` · ${esc(a.due_date)}` : ''}</div></div>`).join('') || '<div class="empty">Sin acciones.</div>'}<button id="add-action">Agregar acción</button></article>
   </div><div class="detail-column">
     <article class="card"><h2>Control</h2><div class="stack"><label>Estado<select id="detail-status">${statusOptions}</select></label><label>Bloqueo<select id="detail-blocker">${blockerOptions}</select></label><label>Empresa<select id="detail-company">${companyOptions}</select></label></div></article>
     <article class="card"><h2>Montos observados</h2><div class="amount-big">${money(c.financial?.largest_observed_amount_clp || 0)}</div><div class="warning">${esc(c.financial?.warning || '')}</div></article>
-    <article class="card"><h2>Fuente pública</h2>${c.detail_url ? `<p><a href="${esc(c.detail_url)}" target="_blank" rel="noopener">Abrir antecedente original</a></p>` : ''}<div class="source-text">${esc(c.detail_text || c.raw_text || '')}</div></article>
+    <article class="card"><h2>Fuente pública</h2>${c.detail_url && safeUrl(c.detail_url) !== '#' ? `<p><a href="${safeUrl(c.detail_url)}" target="_blank" rel="noopener">Abrir antecedente original</a></p>` : ''}<div class="source-text">${esc(c.detail_text || c.raw_text || '')}</div></article>
   </div></div>`;
   $('detail-status').onchange = async e => { await api(`/api/cases/${c.id}/status`, {method:'PATCH', body:JSON.stringify({status:e.target.value})}); toast('Estado actualizado'); openCase(c.id); };
   $('detail-blocker').onchange = async e => { await api(`/api/cases/${c.id}/blocker`, {method:'PATCH', body:JSON.stringify({blocker:e.target.value, reason:null})}); toast('Bloqueo actualizado'); openCase(c.id); };
   $('detail-company').onchange = async e => { if (!e.target.value) return; await api(`/api/cases/${c.id}/company`, {method:'PATCH', body:JSON.stringify({company_id:Number(e.target.value)})}); toast('Empresa vinculada'); openCase(c.id); };
   $('apply-playbook').onclick = async () => { await api(`/api/cases/${c.id}/playbook/apply`, {method:'POST'}); toast('Playbook aplicado'); openCase(c.id); };
   $('add-action').onclick = async () => { const title = prompt('Nueva acción'); if (!title) return; await api(`/api/cases/${c.id}/actions`, {method:'POST', body:JSON.stringify({title})}); toast('Acción creada'); openCase(c.id); };
+  bindRecommendationActions();
 }
 
 async function loadAuto() {
@@ -152,6 +258,7 @@ async function boot() {
   document.querySelectorAll('[data-view-link]').forEach(btn => btn.onclick = async () => { setView(btn.dataset.viewLink); await loadCases(); });
   $('back-cases').onclick = async () => { setView('cases'); await loadCases(); };
   $('refresh-cases').onclick = loadCases;
+  $('command-refresh').onclick = async () => { const b=$('command-refresh'); b.disabled=true; b.textContent='Actualizando…'; try { await api('/api/mail/sync',{method:'POST'}); toast('Inteligencia del piloto actualizada'); await loadDashboard(); } catch(e) { toast(e.message); } finally { b.disabled=false; b.textContent='Actualizar inteligencia'; } };
   $('case-status').onchange = loadCases;
   $('case-search').onkeydown = e => { if (e.key === 'Enter') loadCases(); };
   $('company-form').onsubmit = async e => { e.preventDefault(); try { await api('/api/companies', {method:'POST', body:JSON.stringify({name:$('company-name').value, rut:$('company-rut').value || null})}); e.target.reset(); toast('Empresa guardada'); await loadCompanies(); } catch(err) { toast(err.message); } };
