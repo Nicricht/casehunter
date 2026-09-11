@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 from .database import row_to_dict, transaction
 from .repository import add_timeline_event
@@ -47,6 +47,29 @@ def _score_for(row):
     return min(score, 100)
 
 
+def _as_date(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+        except ValueError:
+            return None
+
+
+def _pilot_days_active(row):
+    start = _as_date(row.get("pilot_started_at"))
+    if start is None:
+        return 0
+    end = date.today()
+    if row.get("case_status") == "RESOLVED":
+        end = _as_date(row.get("case_updated_at")) or end
+    return max(0, (end - start).days)
+
+
 def list_pilot_metrics(limit=100, db_path=None):
     limit = max(1, min(500, int(limit)))
     with transaction(db_path) as conn:
@@ -58,12 +81,17 @@ def list_pilot_metrics(limit=100, db_path=None):
                 k.status AS case_status,
                 k.current_blocker,
                 k.financial_priority,
+                k.updated_at AS case_updated_at,
+                COALESCE(amounts.tracked_amount_clp, 0) AS tracked_amount_clp,
                 COUNT(DISTINCT CASE WHEN om.status IN ('SENT','REPLIED') THEN om.id END) AS sent_count,
                 COUNT(DISTINCT r.id) AS reply_count,
-                COUNT(DISTINCT CASE WHEN r.classification IN ('POSITIVE','REQUESTS_INFO') THEN r.id END) AS positive_reply_count,
+                COUNT(DISTINCT CASE WHEN r.classification IN ('POSITIVE','REQUESTS_INFO','PILOT_REQUESTED') THEN r.id END) AS positive_reply_count,
                 MAX(CASE WHEN r.classification='STILL_PENDING' THEN 1 ELSE 0 END) AS still_pending_reply,
-                MAX(CASE WHEN k.status='BLOCKER_IDENTIFIED' OR r.classification='STILL_PENDING' THEN 1 ELSE 0 END) AS problem_confirmed,
+                MAX(CASE WHEN k.status='BLOCKER_IDENTIFIED' OR r.classification IN ('STILL_PENDING','NO_AGENCY_RESPONSE') THEN 1 ELSE 0 END) AS problem_confirmed,
                 MAX(CASE WHEN te.event_type='PILOT_STARTED' THEN 1 ELSE 0 END) AS pilot_started,
+                MIN(CASE WHEN te.event_type='PILOT_STARTED' THEN te.event_date END) AS pilot_started_at,
+                COUNT(DISTINCT CASE WHEN te.event_type='PUBLIC_WATCH_CHANGE' THEN te.id END) AS public_changes,
+                COUNT(DISTINCT a.id) AS actions_total,
                 COUNT(DISTINCT CASE WHEN a.status='DONE' THEN a.id END) AS done_actions,
                 COUNT(DISTINCT CASE WHEN a.status='TODO' THEN a.id END) AS open_actions,
                 MAX(r.received_at) AS last_reply_at,
@@ -74,7 +102,14 @@ def list_pilot_metrics(limit=100, db_path=None):
             LEFT JOIN outreach_replies r ON r.case_id=k.id
             LEFT JOIN actions a ON a.case_id=k.id
             LEFT JOIN timeline_events te ON te.case_id=k.id
-            GROUP BY k.id, c.name, k.detected_company_name, k.status, k.current_blocker, k.financial_priority
+            LEFT JOIN (
+                SELECT case_id, SUM(amount_clp) AS tracked_amount_clp
+                FROM case_amounts
+                GROUP BY case_id
+            ) amounts ON amounts.case_id=k.id
+            GROUP BY
+                k.id, c.name, k.detected_company_name, k.status, k.current_blocker,
+                k.financial_priority, k.updated_at, amounts.tracked_amount_clp
             ORDER BY k.financial_priority DESC, k.id DESC
             LIMIT ?
             """,
@@ -86,6 +121,12 @@ def list_pilot_metrics(limit=100, db_path=None):
         row = row_to_dict(raw)
         row["stage"] = _stage_for(row)
         row["pilot_score"] = _score_for(row)
+        row["pilot_days_active"] = _pilot_days_active(row)
+        row["has_measurable_result"] = bool(
+            row.get("public_changes", 0)
+            or row.get("done_actions", 0)
+            or row.get("case_status") == "RESOLVED"
+        )
         result.append(row)
     result.sort(key=lambda row: (row["pilot_score"], row.get("financial_priority") or 0), reverse=True)
     return result
@@ -127,10 +168,13 @@ def pilot_funnel(limit=500, db_path=None):
     counts = {stage: 0 for stage in PILOT_STAGES}
     for row in rows:
         counts[row["stage"]] += 1
+    active_rows = [row for row in rows if row["stage"] == "ACTIVE_PILOT"]
     return {
         "counts": counts,
         "total_cases": len(rows),
         "active_pilots": counts["ACTIVE_PILOT"],
         "resolved": counts["RESOLVED"],
+        "tracked_amount_clp_active_pilots": sum(int(row.get("tracked_amount_clp") or 0) for row in active_rows),
+        "public_changes_active_pilots": sum(int(row.get("public_changes") or 0) for row in active_rows),
         "rows": rows,
     }
