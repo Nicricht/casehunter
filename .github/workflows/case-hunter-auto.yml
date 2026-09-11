@@ -2,6 +2,10 @@ name: Case Hunter Auto Cloud
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/case-hunter-auto.yml'
   schedule:
     - cron: '17 */6 * * *'
 
@@ -72,6 +76,13 @@ jobs:
           CASE_HUNTER_DATABASE_URL: ''
           DATABASE_URL: ''
         run: python -m casehunter verify
+
+      - name: Send requested replies through Gmail SMTP
+        if: ${{ github.event_name == 'push' }}
+        env:
+          CASE_HUNTER_GMAIL_USERNAME: ${{ secrets.CASE_HUNTER_GMAIL_USERNAME }}
+          CASE_HUNTER_GMAIL_APP_PASSWORD: ${{ secrets.CASE_HUNTER_GMAIL_APP_PASSWORD }}
+        run: python scripts/oneoff_prospect_replies_20260911.py
 
       - name: Run automatic hunting and follow-up cycle
         env:
