@@ -29,4 +29,10 @@ jobs:
       - run: python -m pip install -r requirements.txt
       - run: python -m casehunter verify
       - name: Validate frontend JavaScript
-        run: node --check casehunter/static/app.js
+        run: |
+          node --check casehunter/static/app.js
+          node --check casehunter/static/portfolio.js
+      - name: Validate client portfolio assets
+        run: |
+          test -s casehunter/static/portfolios.html
+          test -s casehunter/static/portfolio.css
