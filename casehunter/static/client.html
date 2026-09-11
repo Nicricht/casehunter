@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Case Hunter · Portal cliente</title>
+  <link rel="stylesheet" href="/static/client.css">
+</head>
+<body>
+  <div class="portal-shell">
+    <header class="portal-topbar">
+      <div class="brand">
+        <div class="brand-mark">CH</div>
+        <div><strong>Case Hunter</strong><span>Portal de cartera</span></div>
+      </div>
+      <div id="session-tools" class="session-tools hidden">
+        <span id="session-email"></span>
+        <button id="logout" class="ghost">Cerrar sesión</button>
+      </div>
+    </header>
+
+    <main class="portal-main">
+      <section id="login-view" class="auth-wrap hidden">
+        <article class="auth-card">
+          <div class="eyebrow">ACCESO CLIENTE</div>
+          <h1>Tu cartera pública, en un solo lugar.</h1>
+          <p>Consulta casos, organismos, montos, cambios públicos y próximos movimientos sugeridos.</p>
+          <form id="login-form">
+            <label>Correo
+              <input id="login-email" type="email" autocomplete="username" required maxlength="320" placeholder="tu@empresa.cl">
+            </label>
+            <label>Contraseña
+              <input id="login-password" type="password" autocomplete="current-password" required maxlength="256">
+            </label>
+            <button id="login-button" type="submit">Entrar</button>
+          </form>
+          <div id="login-error" class="error hidden"></div>
+        </article>
+      </section>
+
+      <section id="portfolio-view" class="hidden">
+        <div class="hero">
+          <div>
+            <div class="eyebrow">CARTERA DEL CLIENTE</div>
+            <h1 id="company-name">Cargando…</h1>
+            <p id="company-meta"></p>
+          </div>
+          <div class="trust-pill">Solo lectura · datos públicos y seguimiento Case Hunter</div>
+        </div>
+
+        <div id="metrics" class="metrics"></div>
+
+        <div class="layout">
+          <section class="panel main-panel">
+            <div class="panel-head">
+              <div><div class="eyebrow">CASOS</div><h2>Cartera consolidada</h2></div>
+              <button id="refresh" class="ghost">Actualizar</button>
+            </div>
+            <div id="cases"></div>
+          </section>
+
+          <aside class="sidebar-stack">
+            <section class="panel">
+              <div class="eyebrow">ORGANISMOS</div>
+              <h2>Dónde está la cartera</h2>
+              <div id="agencies"></div>
+            </section>
+            <section class="panel">
+              <div class="eyebrow">BLOQUEOS</div>
+              <h2>Qué frena los casos</h2>
+              <div id="blockers"></div>
+            </section>
+          </aside>
+        </div>
+
+        <section class="panel recommendations-panel">
+          <div class="eyebrow">INTELIGENCIA</div>
+          <h2>Próximos movimientos sugeridos</h2>
+          <p class="muted">Las recomendaciones se basan en precedentes resueltos comparables y antecedentes públicos. No prueban causalidad ni reemplazan validación documental.</p>
+          <div id="recommendations"></div>
+        </section>
+      </section>
+
+      <div id="fatal-error" class="fatal hidden"></div>
+    </main>
+  </div>
+  <script src="/static/client.js"></script>
+</body>
+</html>
