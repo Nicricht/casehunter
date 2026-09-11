@@ -87,9 +87,12 @@ RULES = {
     ],
     "ADMINISTRATIVE_DISPUTE": [
         "recurso de invalidacion",
+        "recurso de reposicion",
+        "reposición administrativa",
         "controversia",
         "consulta juridica",
         "recurso administrativo",
+        "impugna la resolucion",
     ],
 }
 
