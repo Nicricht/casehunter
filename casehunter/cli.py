@@ -10,6 +10,7 @@ from .database import init_db
 from .scanner_service import run_ley_lobby_scan
 from .auto_service import run_auto_cycle, run_daemon
 from .followup import process_due_followups
+from .pilot_metrics import pilot_funnel, start_pilot
 from .pilot_watch import build_watchlist
 from .portfolio_watch import list_portfolios
 from .reply_monitor import sync_replies
@@ -49,6 +50,13 @@ def main(argv=None):
     portfolios.add_argument("--search", default=None, help="Filtra por empresa, contrato o identificador")
     portfolios.add_argument("--min-cases", type=int, default=2, help="Cantidad mínima de casos para considerar una cartera recurrente")
     portfolios.add_argument("--all-statuses", action="store_true", help="Incluye también casos fuera de estados activos")
+
+    pilot_metrics = sub.add_parser("pilot-metrics", help="Muestra el embudo medible de validación comercial")
+    pilot_metrics.add_argument("--limit", type=int, default=100, help="Máximo de casos a evaluar")
+
+    pilot_start = sub.add_parser("pilot-start", help="Marca un caso como piloto activo")
+    pilot_start.add_argument("case_id", type=int, help="ID del caso")
+    pilot_start.add_argument("--note", default=None, help="Contexto de aceptación del piloto")
 
     scan = sub.add_parser("scan", help="Ejecuta un escaneo de Ley del Lobby")
     scan.add_argument("url", nargs="?", default=DEFAULT_LEY_LOBBY_URL)
@@ -99,6 +107,18 @@ def main(argv=None):
             indent=2,
         ))
         return 0
+    if args.command == "pilot-metrics":
+        init_db()
+        print(json.dumps(pilot_funnel(limit=args.limit), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "pilot-start":
+        init_db()
+        try:
+            print(json.dumps(start_pilot(args.case_id, args.note), ensure_ascii=False, indent=2))
+            return 0
+        except KeyError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
     if args.command == "scan":
         init_db()
         result = run_ley_lobby_scan(args.url, args.max_pages, not args.no_enrich, args.enrich_limit)
