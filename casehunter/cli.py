@@ -11,6 +11,7 @@ from .scanner_service import run_ley_lobby_scan
 from .auto_service import run_auto_cycle, run_daemon
 from .followup import process_due_followups
 from .pilot_watch import build_watchlist
+from .portfolio_watch import list_portfolios
 from .reply_monitor import sync_replies
 
 
@@ -43,6 +44,11 @@ def main(argv=None):
     watchlist = sub.add_parser("watchlist", help="Prioriza casos activos y muestra la siguiente acción")
     watchlist.add_argument("--search", default=None, help="Filtra por empresa, contrato o identificador")
     watchlist.add_argument("--limit", type=int, default=20, help="Máximo de casos a mostrar")
+
+    portfolios = sub.add_parser("portfolios", help="Agrupa empresas con múltiples casos activos para seguimiento recurrente")
+    portfolios.add_argument("--search", default=None, help="Filtra por empresa, contrato o identificador")
+    portfolios.add_argument("--min-cases", type=int, default=2, help="Cantidad mínima de casos para considerar una cartera recurrente")
+    portfolios.add_argument("--all-statuses", action="store_true", help="Incluye también casos fuera de estados activos")
 
     scan = sub.add_parser("scan", help="Ejecuta un escaneo de Ley del Lobby")
     scan.add_argument("url", nargs="?", default=DEFAULT_LEY_LOBBY_URL)
@@ -80,6 +86,18 @@ def main(argv=None):
     if args.command == "watchlist":
         init_db()
         print(json.dumps(build_watchlist(search=args.search, limit=args.limit), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "portfolios":
+        init_db()
+        print(json.dumps(
+            list_portfolios(
+                min_cases=args.min_cases,
+                active_only=not args.all_statuses,
+                search=args.search,
+            ),
+            ensure_ascii=False,
+            indent=2,
+        ))
         return 0
     if args.command == "scan":
         init_db()
