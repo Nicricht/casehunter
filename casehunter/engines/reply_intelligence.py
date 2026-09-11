@@ -5,6 +5,7 @@ REPLY_CLASSES = {
     "POSITIVE",
     "REQUESTS_INFO",
     "STILL_PENDING",
+    "NO_AGENCY_RESPONSE",
     "RESOLVED",
     "NOT_INTERESTED",
     "NEGATIVE",
@@ -27,6 +28,13 @@ PHRASES = {
         "ya está resuelto", "ya esta resuelto", "se resolvió", "se resolvio", "ya fue pagado",
         "ya se pagó", "ya se pago", "ya fue liquidado", "ya se liquidó", "ya se liquido",
         "ya está cerrado", "ya esta cerrado", "no está pendiente", "no esta pendiente",
+    ],
+    "NO_AGENCY_RESPONSE": [
+        "no hemos recibido más información", "no hemos recibido mas informacion",
+        "no hemos recibido respuesta", "no recibimos respuesta", "sin respuesta",
+        "sin respuesta de correo", "no hubo respuesta", "no hubo respuesta posterior",
+        "no respondió", "no respondio", "no han respondido", "no nos han respondido",
+        "no hubo comunicación posterior", "no hubo comunicacion posterior",
     ],
     "STILL_PENDING": [
         "sigue pendiente", "aún está pendiente", "aun esta pendiente", "continúa pendiente",
@@ -55,7 +63,15 @@ def _classification(text):
     if not value:
         return "OTHER", 0.2
 
-    for label in ("RESOLVED", "STILL_PENDING", "NOT_INTERESTED", "REQUESTS_INFO", "NEGATIVE", "POSITIVE"):
+    for label in (
+        "RESOLVED",
+        "NO_AGENCY_RESPONSE",
+        "STILL_PENDING",
+        "NOT_INTERESTED",
+        "REQUESTS_INFO",
+        "NEGATIVE",
+        "POSITIVE",
+    ):
         if any(token in value for token in PHRASES[label]):
             return label, 0.95
     if value in {"sí", "si", "ok", "okay"}:
@@ -80,6 +96,14 @@ def analyze_reply(text):
             "VALIDATING",
             "CONFIRM_CURRENT_BLOCKER",
             "Confirmar con la empresa cuál es el bloqueo administrativo actual",
+        )
+    if classification == "NO_AGENCY_RESPONSE":
+        return ReplyDecision(
+            classification,
+            confidence,
+            "BLOCKER_IDENTIFIED",
+            "ESCALATE_RESPONSIBLE_UNIT",
+            "Identificar la unidad responsable y escalar el seguimiento solicitando folio, estado y fecha de respuesta",
         )
     if classification == "RESOLVED":
         return ReplyDecision(classification, confidence, "RESOLVED", None, None, True)
