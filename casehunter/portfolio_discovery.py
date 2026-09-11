@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import re
 import unicodedata
 
-from .company_identity import company_matches, normalize_company_name
+from .company_identity import company_matches
 from .database import transaction, utc_now
 from .discovery.ley_lobby import scan_ley_lobby_listing
 from .repository import create_company, get_case, import_candidate, link_case_company, list_companies
@@ -76,15 +76,26 @@ def _find_or_create_company(config, db_path=None):
 
 
 def _cancel_resolved_actions(case_id, db_path=None):
+    now = utc_now()
     with transaction(db_path) as conn:
         conn.execute(
-            "UPDATE actions SET status='CANCELLED',updated_at=? WHERE case_id=? AND status='TODO'",
-            (utc_now(), int(case_id)),
+            "UPDATE actions SET status='CANCELLED' WHERE case_id=? AND status='TODO'",
+            (int(case_id),),
         )
         conn.execute(
             "UPDATE cases SET status='RESOLVED',financial_priority=0,current_blocker=NULL,blocker_reason=?,updated_at=? WHERE id=?",
-            ("El antecedente público indica que la gestión que originó el caso fue resuelta.", utc_now(), int(case_id)),
+            ("El antecedente público indica que la gestión que originó el caso fue resuelta.", now, int(case_id)),
         )
+        exists = conn.execute(
+            "SELECT id FROM timeline_events WHERE case_id=? AND event_type='PUBLIC_PRECEDENT_RESOLVED' LIMIT 1",
+            (int(case_id),),
+        ).fetchone()
+        if not exists:
+            conn.execute(
+                """INSERT INTO timeline_events(case_id,event_type,event_date,title,details,created_at)
+                   VALUES(?,'PUBLIC_PRECEDENT_RESOLVED',substr(?,1,10),'Antecedente público resuelto',?,?)""",
+                (int(case_id), now, "Se conserva como precedente de resolución y no como caso de cobranza activo.", now),
+            )
 
 
 def _portfolio_summary(company_id, db_path=None):
