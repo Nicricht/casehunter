@@ -4,8 +4,14 @@ from datetime import date
 from urllib.parse import urlsplit, urlunsplit
 
 from .database import json_dumps, json_loads, row_to_dict, transaction, utc_now
-from .discovery.collector import fetch_public_text
+from .official_source_registry import sources_for_case
 from .repository import add_timeline_event, create_action, get_case
+from .watch_source_adapters import (
+    extract_order_code,
+    fetch_watch_source,
+    mercado_publico_order_ref,
+    source_kind,
+)
 
 WATCH_SCHEMA = """
 CREATE TABLE IF NOT EXISTS case_watch_sources (
@@ -41,6 +47,8 @@ SIGNALS = (
     ("PAYMENT_COMMITMENT", ("compromiso de pago", "fecha de pago", "calendario de pago", "programación de pago", "programacion de pago")),
     ("FUNDING_MOVEMENT", ("solicitud de recursos", "transferencia de recursos", "remesa", "disponibilidad presupuestaria", "recursos municipales")),
     ("FORMAL_ACT", ("resolución", "resolucion", "decreto", "folio", "ordinario", "memorándum", "memorandum")),
+    ("ORDER_CANCELLED", ("estado: cancelada", "estado cancelada")),
+    ("ORDER_PROGRESS", ("estado: aceptada", "recepción conforme", "recepcion conforme", "recepcionada parcialmente", "recepción parcial")),
     ("RESPONSIBLE_CHANGE", ("director", "directora", "finanzas", "contabilidad", "administrador municipal", "administradora municipal")),
 )
 
@@ -49,6 +57,8 @@ ACTION_BY_SIGNAL = {
     "PAYMENT_COMMITMENT": ("VERIFY_PAYMENT_COMMITMENT", "Validar fecha, alcance y condiciones del nuevo compromiso de pago"),
     "FUNDING_MOVEMENT": ("VERIFY_FUNDING_MOVEMENT", "Verificar si el movimiento de recursos alcanza al caso y cuál es el siguiente hito"),
     "FORMAL_ACT": ("REVIEW_FORMAL_ACT", "Revisar el nuevo acto formal y determinar cómo cambia el siguiente paso"),
+    "ORDER_CANCELLED": ("REVIEW_CANCELLED_ORDER", "Revisar la cancelación de la orden de compra y su impacto en el caso"),
+    "ORDER_PROGRESS": ("VERIFY_PURCHASE_ORDER_PROGRESS", "Verificar el avance de la orden de compra y si habilita recepción, facturación o pago"),
     "RESPONSIBLE_CHANGE": ("VERIFY_RESPONSIBLE_UNIT", "Verificar si cambió la unidad o persona responsable del seguimiento"),
     "PUBLIC_CHANGE": ("REVIEW_PUBLIC_CHANGE", "Revisar el cambio público detectado y determinar si modifica el caso"),
 }
@@ -115,6 +125,13 @@ def _candidate_urls(case):
             parent = _ley_lobby_parent(value)
             if parent:
                 urls.append(parent)
+
+    urls.extend(sources_for_case(case))
+
+    order_code = extract_order_code(case.get("contract_ref"))
+    if order_code:
+        urls.append(mercado_publico_order_ref(order_code))
+
     return list(dict.fromkeys(urls))
 
 
@@ -127,6 +144,9 @@ def configure_case_watch(case_id, source_urls=None, keywords=None, db_path=None)
     created = 0
     with transaction(db_path) as conn:
         for url in urls:
+            url = str(url or "").strip()
+            if not url:
+                continue
             existing = conn.execute(
                 "SELECT case_id FROM case_watch_sources WHERE case_id=? AND source_url=?",
                 (int(case_id), url),
@@ -160,6 +180,7 @@ def list_watch_sources(case_id=None, db_path=None):
     for row in rows:
         item = row_to_dict(row)
         item["keywords"] = json_loads(item.get("keywords"), [])
+        item["source_kind"] = source_kind(item.get("source_url"))
         result.append(item)
     return result
 
@@ -188,27 +209,46 @@ def _ensure_action(case_id, action_type, title, note, db_path=None):
     )
 
 
-def run_case_watch(case_id, fetcher=None, db_path=None):
+def run_case_watch(case_id, fetcher=None, mercado_fetcher=None, db_path=None):
     _ensure_schema(db_path)
     sources = list_watch_sources(case_id, db_path)
     if not sources:
         configure_case_watch(case_id, db_path=db_path)
         sources = list_watch_sources(case_id, db_path)
-    fetch = fetcher or fetch_public_text
     checked = 0
     baselined = 0
     changes = 0
     errors = 0
+    discovered = 0
     events = []
     for source in sources:
         if source.get("status") != "ACTIVE":
             continue
         now = utc_now()
         try:
-            document = fetch(source["source_url"])
-            relevant = _relevant_text(document.get("text"), source.get("keywords") or [])
+            document = fetch_watch_source(
+                source["source_url"],
+                http_fetcher=fetcher,
+                mercado_fetcher=mercado_fetcher,
+            )
+            source_type = document.get("kind") or source_kind(source["source_url"])
+            if source_type == "MERCADO_PUBLICO_OC":
+                relevant = _normalize(document.get("text"))
+            else:
+                relevant = _relevant_text(document.get("text"), source.get("keywords") or [])
             fingerprint = _fingerprint(relevant)
             checked += 1
+
+            discovered_urls = document.get("discovered_urls") or []
+            if discovered_urls:
+                configured = configure_case_watch(
+                    case_id,
+                    source_urls=discovered_urls[:12],
+                    keywords=source.get("keywords") or None,
+                    db_path=db_path,
+                )
+                discovered += int(configured.get("created") or 0)
+
             previous_fp = source.get("last_fingerprint")
             previous_text = source.get("last_relevant_text") or ""
             if not previous_fp:
@@ -218,6 +258,7 @@ def run_case_watch(case_id, fetcher=None, db_path=None):
                 changed_text = "\n".join(added) or relevant
                 signal = _signal(changed_text)
                 snippet = changed_text[:4000]
+                event_created = False
                 with transaction(db_path) as conn:
                     existing = conn.execute(
                         "SELECT fingerprint FROM case_watch_events WHERE case_id=? AND source_url=? AND fingerprint=?",
@@ -230,14 +271,20 @@ def run_case_watch(case_id, fetcher=None, db_path=None):
                             (int(case_id), source["source_url"], fingerprint, signal, snippet, now),
                         )
                         changes += 1
-                        events.append({"source_url": source["source_url"], "signal": signal, "snippet": snippet})
-                if events and events[-1]["source_url"] == source["source_url"]:
+                        event_created = True
+                        events.append({
+                            "source_url": source["source_url"],
+                            "source_kind": source_type,
+                            "signal": signal,
+                            "snippet": snippet,
+                        })
+                if event_created:
                     action_type, title = ACTION_BY_SIGNAL[signal]
                     _ensure_action(
                         case_id,
                         action_type,
                         title,
-                        f"Cambio detectado automáticamente en {source['source_url']}. Señal: {signal}.",
+                        f"Cambio detectado automáticamente en {source['source_url']}. Fuente: {source_type}. Señal: {signal}.",
                         db_path,
                     )
                     add_timeline_event(
@@ -263,10 +310,18 @@ def run_case_watch(case_id, fetcher=None, db_path=None):
                     "UPDATE case_watch_sources SET last_checked_at=?,last_error=?,updated_at=? WHERE case_id=? AND source_url=?",
                     (now, str(exc)[:1000], now, int(case_id), source["source_url"]),
                 )
-    return {"case_id": int(case_id), "checked": checked, "baselined": baselined, "changes": changes, "errors": errors, "events": events}
+    return {
+        "case_id": int(case_id),
+        "checked": checked,
+        "baselined": baselined,
+        "changes": changes,
+        "discovered_sources": discovered,
+        "errors": errors,
+        "events": events,
+    }
 
 
-def run_active_watches(db_path=None, fetcher=None, limit=100):
+def run_active_watches(db_path=None, fetcher=None, mercado_fetcher=None, limit=100):
     _ensure_schema(db_path)
     with transaction(db_path) as conn:
         rows = conn.execute(
@@ -279,12 +334,18 @@ def run_active_watches(db_path=None, fetcher=None, limit=100):
     for row in rows:
         case_id = int(row["case_id"])
         configure_case_watch(case_id, db_path=db_path)
-        results.append(run_case_watch(case_id, fetcher=fetcher, db_path=db_path))
+        results.append(run_case_watch(
+            case_id,
+            fetcher=fetcher,
+            mercado_fetcher=mercado_fetcher,
+            db_path=db_path,
+        ))
     return {
         "active_cases": len(results),
         "checked": sum(item["checked"] for item in results),
         "baselined": sum(item["baselined"] for item in results),
         "changes": sum(item["changes"] for item in results),
+        "discovered_sources": sum(item["discovered_sources"] for item in results),
         "errors": sum(item["errors"] for item in results),
         "results": results,
     }
