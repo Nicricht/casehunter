@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Case Hunter · Cartera del cliente</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/portfolio.css">
+</head>
+<body class="client-body">
+  <header class="client-topbar">
+    <div class="client-brand">
+      <div class="brand-mark">CH</div>
+      <div><strong>Case Hunter</strong><span>Vista de cartera · solo lectura</span></div>
+    </div>
+    <a class="client-back" href="/">Volver al Command Center</a>
+  </header>
+
+  <main class="client-main">
+    <section id="portfolio-picker" class="client-panel">
+      <div class="client-heading">
+        <div>
+          <div class="eyebrow">CARTERAS</div>
+          <h1>Empresas bajo seguimiento</h1>
+          <p class="muted">Selecciona una empresa para abrir su cartera consolidada.</p>
+        </div>
+      </div>
+      <div id="portfolio-list" class="client-portfolio-grid"></div>
+    </section>
+
+    <section id="portfolio-detail" class="hidden">
+      <div class="client-heading">
+        <div>
+          <div class="eyebrow">CARTERA DEL CLIENTE</div>
+          <h1 id="client-company">Cargando cartera…</h1>
+          <p id="client-summary" class="muted"></p>
+        </div>
+        <a class="client-secondary" href="/static/portfolios.html">Cambiar empresa</a>
+      </div>
+
+      <div id="client-metrics" class="metrics client-metrics"></div>
+
+      <div class="client-grid">
+        <article class="card">
+          <div class="card-head"><div><div class="eyebrow">CASOS</div><h2>Cartera consolidada</h2></div></div>
+          <div id="client-cases"></div>
+        </article>
+        <aside class="client-side">
+          <article class="card">
+            <div class="eyebrow">ORGANISMOS</div>
+            <h2>Dónde está la cartera</h2>
+            <div id="client-agencies"></div>
+          </article>
+          <article class="card">
+            <div class="eyebrow">BLOQUEOS</div>
+            <h2>Qué está frenando los casos</h2>
+            <div id="client-blockers"></div>
+          </article>
+        </aside>
+      </div>
+
+      <article class="card client-actions-card">
+        <div class="card-head"><div><div class="eyebrow">INTELIGENCIA</div><h2>Próximos movimientos sugeridos</h2></div></div>
+        <p class="muted client-intro">Estas recomendaciones se basan en antecedentes públicos y precedentes resueltos comparables. No sustituyen la validación documental ni prueban causalidad.</p>
+        <div id="client-recommendations"></div>
+      </article>
+    </section>
+
+    <div id="client-error" class="client-error hidden"></div>
+  </main>
+
+  <script src="/static/portfolio.js"></script>
+</body>
+</html>
