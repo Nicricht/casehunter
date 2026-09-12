@@ -4,6 +4,7 @@ import os
 from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 from .auto_service import run_auto_cycle
 from .database import backend_name, connect, init_db
@@ -65,10 +66,11 @@ def healthz():
         database_ok = _database_ok()
     except Exception:
         database_ok = False
-    return {
+    payload = {
         "status": "ok" if database_ok else "degraded",
         "database_backend": backend_name(),
         "database_ok": database_ok,
         "interval_minutes": INTERVAL_MINUTES,
         "last_run": app.state.last_run,
     }
+    return JSONResponse(payload, status_code=200 if database_ok else 503)
