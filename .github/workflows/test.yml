@@ -32,7 +32,10 @@ jobs:
         run: |
           node --check casehunter/static/app.js
           node --check casehunter/static/portfolio.js
+          node --check casehunter/static/client.js
       - name: Validate client portfolio assets
         run: |
           test -s casehunter/static/portfolios.html
           test -s casehunter/static/portfolio.css
+          test -s casehunter/static/client.html
+          test -s casehunter/static/client.css
