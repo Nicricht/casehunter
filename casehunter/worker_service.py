@@ -8,10 +8,12 @@ from fastapi.responses import JSONResponse
 
 from .auto_service import run_auto_cycle
 from .database import backend_name, connect, init_db
+from .production_bootstrap import bootstrap_alembic_pilot
 
 LOGGER = logging.getLogger("casehunter.worker")
 INTERVAL_MINUTES = max(60, int(os.getenv("CASE_HUNTER_AUTO_INTERVAL_MINUTES", "360")))
 RUN_ON_START = os.getenv("CASE_HUNTER_WORKER_RUN_ON_START", "1").strip().lower() not in {"0", "false", "no"}
+BOOTSTRAP_ALEMBIC = os.getenv("CASE_HUNTER_BOOTSTRAP_ALEMBIC", "0").strip().lower() in {"1", "true", "yes"}
 
 
 async def _automation_loop(app):
@@ -19,6 +21,14 @@ async def _automation_loop(app):
         await asyncio.sleep(INTERVAL_MINUTES * 60)
     else:
         await asyncio.sleep(10)
+
+    if BOOTSTRAP_ALEMBIC:
+        try:
+            app.state.bootstrap = await asyncio.to_thread(bootstrap_alembic_pilot)
+        except Exception as exc:
+            LOGGER.exception("Alembic production bootstrap failed")
+            app.state.bootstrap = {"status": "ERROR", "error": type(exc).__name__}
+
     while True:
         try:
             result = await asyncio.to_thread(run_auto_cycle)
@@ -48,6 +58,7 @@ def _database_ok():
 async def lifespan(app):
     init_db()
     app.state.last_run = None
+    app.state.bootstrap = None
     task = asyncio.create_task(_automation_loop(app))
     try:
         yield
@@ -71,6 +82,7 @@ def healthz():
         "database_backend": backend_name(),
         "database_ok": database_ok,
         "interval_minutes": INTERVAL_MINUTES,
-        "last_run": app.state.last_run,
+        "bootstrap": getattr(app.state, "bootstrap", None),
+        "last_run": getattr(app.state, "last_run", None),
     }
     return JSONResponse(payload, status_code=200 if database_ok else 503)
