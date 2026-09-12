@@ -1,9 +1,10 @@
 name: Case Hunter Auto Cloud
 
+# Railway worker + PostgreSQL are the production source of truth.
+# This workflow remains manual-only for controlled diagnostics and must never
+# fall back to an independent SQLite state.
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '17 */6 * * *'
 
 concurrency:
   group: case-hunter-auto-cloud-v3
@@ -13,16 +14,14 @@ permissions:
   contents: read
 
 env:
-  # Si existe este secret, el ciclo usa PostgreSQL persistente. Si está vacío,
-  # conserva el modo SQLite + cache para la etapa de validación de bajo costo.
   CASE_HUNTER_DATABASE_URL: ${{ secrets.CASE_HUNTER_DATABASE_URL }}
-  CASE_HUNTER_AUTO_SEND_APPROVED: '1'
-  CASE_HUNTER_AUTO_POLICY_SEND: '1'
+  CASE_HUNTER_AUTO_SEND_APPROVED: '0'
+  CASE_HUNTER_AUTO_POLICY_SEND: '0'
   CASE_HUNTER_AUTO_SEND_MIN_PRIORITY: '70'
   CASE_HUNTER_AUTO_MAX_FIRST_CONTACTS_PER_DAY: '10'
   CASE_HUNTER_AUTO_CONTACT_DISCOVERY: '1'
   CASE_HUNTER_AUTO_MONITOR_REPLIES: '1'
-  CASE_HUNTER_AUTO_SEND_FOLLOWUPS: '1'
+  CASE_HUNTER_AUTO_SEND_FOLLOWUPS: '0'
   CASE_HUNTER_AUTO_FOLLOWUP_DAYS: '5'
   CASE_HUNTER_STORE_REPLY_CONTENT: '0'
   CASE_HUNTER_AUTO_MIN_PRIORITY: '20'
@@ -34,7 +33,6 @@ env:
   CASE_HUNTER_CONTACT_TIMEOUT: '8'
   CASE_HUNTER_CONTACT_MAX_SITES: '2'
   CASE_HUNTER_AUTO_INTERVAL_MINUTES: '360'
-  CASE_HUNTER_DATA_DIR: ${{ github.workspace }}/data
   CASE_HUNTER_OCR_LANG: 'spa+eng'
 
 jobs:
@@ -52,15 +50,13 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.txt
 
-      - name: Restore SQLite state
-        if: ${{ env.CASE_HUNTER_DATABASE_URL == '' }}
-        uses: actions/cache@v4
-        with:
-          path: data
-          key: case-hunter-state-v3-${{ github.run_id }}
-          restore-keys: |
-            case-hunter-state-v3-
-            case-hunter-state-v2-
+      - name: Require production PostgreSQL
+        shell: bash
+        run: |
+          if [ -z "$CASE_HUNTER_DATABASE_URL" ]; then
+            echo "CASE_HUNTER_DATABASE_URL is required. SQLite fallback is intentionally disabled."
+            exit 1
+          fi
 
       - name: Install OCR runtime
         run: |
@@ -73,14 +69,15 @@ jobs:
           python -m pip install -r requirements.txt
 
       - name: Verify Case Hunter before hunting
-        # La suite jamás debe tocar la base productiva aunque exista un secret.
+        # The test suite stays isolated from production even when the workflow
+        # is manually dispatched with the production PostgreSQL secret.
         env:
           CASE_HUNTER_DATABASE_URL: ''
           DATABASE_URL: ''
           MERCADO_PUBLICO_TICKET: ''
         run: python -m casehunter verify
 
-      - name: Run automatic hunting and follow-up cycle
+      - name: Run manual diagnostic hunting cycle
         env:
           CASE_HUNTER_SMTP_USERNAME: ${{ secrets.CASE_HUNTER_GMAIL_USERNAME }}
           CASE_HUNTER_SMTP_PASSWORD: ${{ secrets.CASE_HUNTER_GMAIL_APP_PASSWORD }}
