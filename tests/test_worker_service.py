@@ -1,8 +1,11 @@
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from casehunter import worker_service
+from casehunter.database import init_db, transaction, utc_now
 
 
 class WorkerServiceTests(unittest.TestCase):
@@ -28,6 +31,27 @@ class WorkerServiceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(result["status"], "degraded")
         self.assertFalse(result["database_ok"])
+
+    def test_interrupted_runs_are_closed_before_new_cycle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "worker.db"
+            init_db(db)
+            with transaction(db) as conn:
+                conn.execute(
+                    "INSERT INTO automation_runs(started_at,status,source_urls) VALUES(?,'RUNNING','[]')",
+                    (utc_now(),),
+                )
+
+            closed = worker_service._close_interrupted_runs(db)
+            self.assertEqual(closed, 1)
+
+            with transaction(db) as conn:
+                row = conn.execute(
+                    "SELECT status,finished_at,error FROM automation_runs ORDER BY id DESC LIMIT 1"
+                ).fetchone()
+            self.assertEqual(row["status"], "INTERRUPTED")
+            self.assertIsNotNone(row["finished_at"])
+            self.assertIn("worker restarted", row["error"].lower())
 
 
 if __name__ == "__main__":
