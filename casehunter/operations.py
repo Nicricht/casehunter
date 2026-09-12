@@ -1,3 +1,4 @@
+from .commercial_pipeline import commercialize_case
 from .database import row_to_dict, transaction
 from .pilot_metrics import pilot_funnel
 
@@ -20,11 +21,7 @@ def _ratio(numerator, denominator):
 
 
 def operations_snapshot(db_path=None, top_limit=10):
-    """Return business-facing KPIs instead of infrastructure-only metrics.
-
-    The product should optimize for confirmed cases, replies, active pilots and
-    resolutions, not merely for scans or email volume.
-    """
+    """Return business-facing KPIs and ranked commercial opportunities."""
     top_limit = max(1, min(50, int(top_limit)))
     with transaction(db_path) as conn:
         case_rows = conn.execute("SELECT status,COUNT(*) n FROM cases GROUP BY status").fetchall()
@@ -45,22 +42,65 @@ def operations_snapshot(db_path=None, top_limit=10):
         open_actions = int(conn.execute("SELECT COUNT(*) n FROM actions WHERE status NOT IN ('DONE','CANCELLED')").fetchone()["n"])
         due_followups = int(conn.execute("SELECT COUNT(*) n FROM followups WHERE status IN ('DUE','READY')").fetchone()["n"])
 
-        top = conn.execute(
-            """SELECT k.id,k.detected_company_name,k.contract_ref,k.agency,k.status,k.financial_priority,
-                      MAX(COALESCE(a.trust_score,0)) contact_trust_score,
-                      MAX(CASE WHEN a.decision='AUTO_SEND' THEN 1 ELSE 0 END) has_auto_send_contact
+        # Fetch a wider candidate pool and rank in Python so engagement can outrank
+        # raw financial priority when a real company has already replied.
+        candidate_limit = max(200, top_limit * 10)
+        rows = conn.execute(
+            """SELECT k.id,k.detected_company_name,k.contract_ref,k.agency,k.status,
+                      k.financial_priority,k.confidence_score,k.confidence_label,k.current_blocker,
+                      COALESCE((
+                          SELECT MAX(COALESCE(a.trust_score,0))
+                          FROM contacts c LEFT JOIN contact_assessments a ON a.contact_id=c.id
+                          WHERE c.case_id=k.id AND c.status<>'REJECTED'
+                      ),0) contact_trust_score,
+                      CASE WHEN (
+                          SELECT COUNT(*) FROM contacts c
+                          WHERE c.case_id=k.id AND c.status<>'REJECTED'
+                      )>0 THEN 1 ELSE 0 END has_contact,
+                      CASE WHEN (
+                          SELECT COUNT(*) FROM contacts c JOIN contact_assessments a ON a.contact_id=c.id
+                          WHERE c.case_id=k.id AND c.status<>'REJECTED' AND a.decision='AUTO_SEND'
+                      )>0 THEN 1 ELSE 0 END has_auto_send_contact,
+                      CASE WHEN (
+                          SELECT COUNT(*) FROM outreach_messages o
+                          WHERE o.case_id=k.id AND o.status IN ('SENT','REPLIED')
+                      )>0 THEN 1 ELSE 0 END has_contacted,
+                      CASE WHEN (
+                          SELECT COUNT(*) FROM outreach_replies r WHERE r.case_id=k.id
+                      )>0 THEN 1 ELSE 0 END has_reply,
+                      COALESCE((
+                          SELECT r.classification FROM outreach_replies r
+                          WHERE r.case_id=k.id ORDER BY r.id DESC LIMIT 1
+                      ),'') latest_reply_classification,
+                      CASE WHEN (
+                          SELECT COUNT(*) FROM actions ac
+                          WHERE ac.case_id=k.id AND ac.action_type='WATCH_PUBLIC_CASE' AND ac.status='TODO'
+                      )>0 THEN 1 ELSE 0 END has_watch_action
                FROM cases k
-               LEFT JOIN contacts c ON c.case_id=k.id AND c.status<>'REJECTED'
-               LEFT JOIN contact_assessments a ON a.contact_id=c.id
                WHERE k.status NOT IN ('RESOLVED','DISMISSED')
-               GROUP BY k.id
-               ORDER BY k.financial_priority DESC,contact_trust_score DESC,k.id DESC
+               ORDER BY k.financial_priority DESC,k.id DESC
                LIMIT ?""",
-            (top_limit,),
+            (candidate_limit,),
         ).fetchall()
 
     pilots = pilot_funnel(limit=500, db_path=db_path)
     pilot_counts = pilots["counts"]
+    opportunities = [commercialize_case(row_to_dict(row)) for row in rows]
+    opportunities.sort(
+        key=lambda item: (
+            int(item.get("opportunity_score") or 0),
+            int(item.get("financial_priority") or 0),
+            int(item.get("contact_trust_score") or 0),
+            int(item.get("id") or 0),
+        ),
+        reverse=True,
+    )
+    opportunities = opportunities[:top_limit]
+
+    stage_counts = {}
+    for item in opportunities:
+        stage = item["commercial_stage"]
+        stage_counts[stage] = stage_counts.get(stage, 0) + 1
 
     return {
         "kpis": {
@@ -81,6 +121,7 @@ def operations_snapshot(db_path=None, top_limit=10):
             "pilot_resolved": pilots["resolved"],
         },
         "case_statuses": status_counts,
+        "commercial_stages_top": stage_counts,
         "pilot_funnel": pilots,
-        "top_opportunities": [row_to_dict(row) for row in top],
+        "top_opportunities": opportunities,
     }
