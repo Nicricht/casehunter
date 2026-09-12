@@ -3,9 +3,14 @@ import unittest
 from pathlib import Path
 
 from casehunter.database import init_db
-from casehunter.public_watch import configure_case_watch
+from casehunter.public_watch import configure_case_watch, list_watch_sources
 from casehunter.repository import create_action, import_candidate
-from casehunter.watch_batch import run_bounded_active_watches
+from casehunter.watch_batch import (
+    _enforce_source_budget,
+    _new_discovery_urls,
+    _protected_urls,
+    run_bounded_active_watches,
+)
 
 
 def candidate():
@@ -95,6 +100,41 @@ class WatchBatchTests(unittest.TestCase):
         self.assertEqual(len(first_secondary), 1)
         self.assertEqual(len(second_secondary), 1)
         self.assertNotEqual(first_secondary[0], second_secondary[0])
+
+    def test_source_budget_archives_overflow_and_never_reactivates_archived_discovery(self):
+        configure_case_watch(self.case["id"], db_path=self.db)
+        configure_case_watch(
+            self.case["id"],
+            source_urls=[f"https://noise.example.com/page-{index}" for index in range(20)],
+            keywords=["alembic"],
+            db_path=self.db,
+        )
+
+        budget = 7
+        result = _enforce_source_budget(self.case["id"], max_sources=budget, db_path=self.db)
+        sources = list_watch_sources(self.case["id"], db_path=self.db)
+        active = [item for item in sources if item["status"] == "ACTIVE"]
+        archived = [item for item in sources if item["status"] == "ARCHIVED"]
+        protected = _protected_urls(self.case)
+
+        self.assertGreater(result["archived_sources"], 0)
+        self.assertGreater(len(archived), 0)
+        self.assertEqual(len(active), max(budget, len(protected)))
+        for url in protected:
+            matching = [item for item in sources if item["source_url"] == url]
+            self.assertTrue(matching)
+            self.assertEqual(matching[0]["status"], "ACTIVE")
+
+        archived_url = archived[0]["source_url"]
+        new_url = "https://noise.example.com/new-page"
+        allowed = _new_discovery_urls(
+            self.case["id"],
+            [archived_url, new_url],
+            remaining_capacity=2,
+            db_path=self.db,
+        )
+        self.assertNotIn(archived_url, allowed)
+        self.assertEqual(allowed, [new_url])
 
 
 if __name__ == "__main__":

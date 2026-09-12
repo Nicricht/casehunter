@@ -3,6 +3,7 @@ from datetime import date
 from .database import transaction, utc_now
 from .public_watch import (
     ACTION_BY_SIGNAL,
+    _candidate_urls,
     _ensure_action,
     _ensure_schema,
     _fingerprint,
@@ -15,6 +16,88 @@ from .public_watch import (
 )
 from .repository import add_timeline_event, get_case
 from .watch_source_adapters import fetch_watch_source, source_kind
+
+
+def _source_budget(value):
+    return max(1, min(2000, int(value)))
+
+
+def _protected_urls(case):
+    """Return the stable official/core URLs that must never be archived by the budget."""
+    return {
+        str(url).strip()
+        for url in _candidate_urls(case)
+        if str(url or "").strip()
+    }
+
+
+def _enforce_source_budget(case_id, max_sources=250, db_path=None):
+    """Archive low-priority overflow while keeping official/core watch sources active."""
+    budget = _source_budget(max_sources)
+    case = get_case(case_id, db_path)
+    protected_urls = _protected_urls(case)
+    sources = [item for item in list_watch_sources(case_id, db_path) if item.get("status") == "ACTIVE"]
+
+    protected = [item for item in sources if item.get("source_url") in protected_urls]
+    dynamic = [item for item in sources if item.get("source_url") not in protected_urls]
+
+    # Keep already-useful/healthy dynamic sources first. The batch selector still rotates
+    # what gets checked, but the stored source set can no longer grow forever.
+    dynamic.sort(
+        key=lambda item: (
+            0 if item.get("last_fingerprint") else 1,
+            0 if not item.get("last_error") else 1,
+            item.get("last_checked_at") or "",
+            item.get("source_url") or "",
+        )
+    )
+
+    effective_budget = max(budget, len(protected))
+    keep_dynamic = max(0, effective_budget - len(protected))
+    archive = dynamic[keep_dynamic:]
+    now = utc_now()
+    if archive:
+        with transaction(db_path) as conn:
+            for item in archive:
+                conn.execute(
+                    """UPDATE case_watch_sources
+                       SET status='ARCHIVED',updated_at=?
+                       WHERE case_id=? AND source_url=? AND status='ACTIVE'""",
+                    (now, int(case_id), item["source_url"]),
+                )
+
+    return {
+        "case_id": int(case_id),
+        "max_sources": budget,
+        "protected_sources": len(protected),
+        "active_before": len(sources),
+        "active_after": len(sources) - len(archive),
+        "archived_sources": len(archive),
+    }
+
+
+def _new_discovery_urls(case_id, discovered_urls, remaining_capacity, db_path=None):
+    """Only admit genuinely new discovered URLs; archived URLs stay archived."""
+    slots = max(0, int(remaining_capacity))
+    if slots <= 0:
+        return []
+
+    candidates = []
+    for url in discovered_urls or []:
+        value = str(url or "").strip()
+        if value and value not in candidates:
+            candidates.append(value)
+    if not candidates:
+        return []
+
+    with transaction(db_path) as conn:
+        rows = conn.execute(
+            "SELECT source_url,status FROM case_watch_sources WHERE case_id=?",
+            (int(case_id),),
+        ).fetchall()
+    existing = {row["source_url"]: row["status"] for row in rows}
+
+    return [url for url in candidates if url not in existing][:slots]
 
 
 def _source_batch(case_id, source_limit=25, db_path=None):
@@ -50,11 +133,15 @@ def run_case_watch_batch(
     mercado_fetcher=None,
     db_path=None,
     source_limit=25,
+    max_sources=250,
 ):
-    """Run a bounded watch batch for one case and rotate secondary sources over time."""
+    """Run a bounded watch batch and enforce a hard per-case source budget."""
     _ensure_schema(db_path)
-    if not list_watch_sources(case_id, db_path):
-        configure_case_watch(case_id, db_path=db_path)
+
+    # Re-activate only official/core candidates. Dynamic archived sources are not
+    # reactivated automatically.
+    configure_case_watch(case_id, db_path=db_path)
+    budget = _enforce_source_budget(case_id, max_sources=max_sources, db_path=db_path)
 
     sources, available_sources = _source_batch(case_id, source_limit=source_limit, db_path=db_path)
     checked = 0
@@ -63,6 +150,8 @@ def run_case_watch_batch(
     errors = 0
     discovered = 0
     events = []
+    active_sources = int(budget["active_after"])
+    capacity = max(0, int(budget["max_sources"]) - active_sources)
 
     for source in sources:
         now = utc_now()
@@ -80,15 +169,23 @@ def run_case_watch_batch(
             fingerprint = _fingerprint(relevant)
             checked += 1
 
-            discovered_urls = document.get("discovered_urls") or []
+            discovered_urls = _new_discovery_urls(
+                case_id,
+                (document.get("discovered_urls") or [])[:12],
+                capacity,
+                db_path=db_path,
+            )
             if discovered_urls:
                 configured = configure_case_watch(
                     case_id,
-                    source_urls=discovered_urls[:12],
+                    source_urls=discovered_urls,
                     keywords=source.get("keywords") or None,
                     db_path=db_path,
                 )
-                discovered += int(configured.get("created") or 0)
+                created = int(configured.get("created") or 0)
+                discovered += created
+                active_sources += created
+                capacity = max(0, int(budget["max_sources"]) - active_sources)
 
             previous_fp = source.get("last_fingerprint")
             previous_text = source.get("last_relevant_text") or ""
@@ -157,8 +254,10 @@ def run_case_watch_batch(
 
     return {
         "case_id": int(case_id),
+        "source_budget": int(budget["max_sources"]),
         "available_sources": available_sources,
         "selected_sources": len(sources),
+        "archived_sources": int(budget["archived_sources"]),
         "checked": checked,
         "baselined": baselined,
         "changes": changes,
@@ -174,8 +273,9 @@ def run_bounded_active_watches(
     mercado_fetcher=None,
     case_limit=100,
     source_limit_per_case=25,
+    max_sources_per_case=250,
 ):
-    """Watch active pilot cases without letting source discovery create unbounded cycles."""
+    """Watch active cases with bounded processing and bounded stored source growth."""
     _ensure_schema(db_path)
     with transaction(db_path) as conn:
         rows = conn.execute(
@@ -188,7 +288,6 @@ def run_bounded_active_watches(
     results = []
     for row in rows:
         case_id = int(row["case_id"])
-        configure_case_watch(case_id, db_path=db_path)
         results.append(
             run_case_watch_batch(
                 case_id,
@@ -196,6 +295,7 @@ def run_bounded_active_watches(
                 mercado_fetcher=mercado_fetcher,
                 db_path=db_path,
                 source_limit=source_limit_per_case,
+                max_sources=max_sources_per_case,
             )
         )
 
@@ -203,6 +303,7 @@ def run_bounded_active_watches(
         "active_cases": len(results),
         "available_sources": sum(item["available_sources"] for item in results),
         "selected_sources": sum(item["selected_sources"] for item in results),
+        "archived_sources": sum(item["archived_sources"] for item in results),
         "checked": sum(item["checked"] for item in results),
         "baselined": sum(item["baselined"] for item in results),
         "changes": sum(item["changes"] for item in results),
