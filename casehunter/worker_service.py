@@ -9,13 +9,14 @@ from fastapi.responses import JSONResponse
 from .auto_service import run_auto_cycle
 from .database import backend_name, connect, init_db
 from .production_bootstrap import ALEMBIC_CASE_EXTERNAL_ID, ALEMBIC_BOOTSTRAP_KEY, bootstrap_alembic_pilot
-from .public_watch import run_active_watches
+from .watch_batch import run_bounded_active_watches
 
 LOGGER = logging.getLogger("uvicorn.error")
 LOGGER.setLevel(logging.INFO)
 INTERVAL_MINUTES = max(60, int(os.getenv("CASE_HUNTER_AUTO_INTERVAL_MINUTES", "360")))
 RUN_ON_START = os.getenv("CASE_HUNTER_WORKER_RUN_ON_START", "1").strip().lower() not in {"0", "false", "no"}
 BOOTSTRAP_ALEMBIC = os.getenv("CASE_HUNTER_BOOTSTRAP_ALEMBIC", "0").strip().lower() in {"1", "true", "yes"}
+WATCH_SOURCES_PER_CASE = max(1, min(100, int(os.getenv("CASE_HUNTER_WATCH_SOURCES_PER_CASE", "25"))))
 
 
 def _query_one(sql, params=()):
@@ -101,6 +102,8 @@ def _watch_summary(value):
     value = value or {}
     return {
         "active_cases": int(value.get("active_cases") or 0),
+        "available_sources": int(value.get("available_sources") or 0),
+        "selected_sources": int(value.get("selected_sources") or 0),
         "checked": int(value.get("checked") or 0),
         "baselined": int(value.get("baselined") or 0),
         "changes": int(value.get("changes") or 0),
@@ -129,7 +132,10 @@ async def _automation_loop(app):
 
     while True:
         try:
-            watch_result = await asyncio.to_thread(run_active_watches)
+            watch_result = await asyncio.to_thread(
+                run_bounded_active_watches,
+                source_limit_per_case=WATCH_SOURCES_PER_CASE,
+            )
             app.state.last_watch = _watch_summary(watch_result)
             LOGGER.info("Case Hunter public watcher completed: %s", app.state.last_watch)
         except Exception as exc:
@@ -191,6 +197,7 @@ def healthz():
         "database_backend": backend_name(),
         "database_ok": database_ok,
         "interval_minutes": INTERVAL_MINUTES,
+        "watch_sources_per_case": WATCH_SOURCES_PER_CASE,
         "bootstrap": getattr(app.state, "bootstrap", None),
         "last_watch": getattr(app.state, "last_watch", None),
         "last_run": getattr(app.state, "last_run", None),
