@@ -39,6 +39,7 @@ from .followup import list_followups, process_due_followups
 from .gmail_service import imap_configured
 from .operations import operations_snapshot
 from .outreach import approve_outreach, attach_recipient, list_outreach, reject_outreach, send_outreach, smtp_configured
+from .prospecting import build_prospect_dossier, prepare_prospect
 from .reply_monitor import list_replies, sync_replies
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -169,6 +170,22 @@ def create_app(db_path=None, auth_username=None, auth_password=None):
             return get_case(case_id, app.state.db_path)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/cases/{case_id}/prospect")
+    def get_case_prospect(case_id: int):
+        try:
+            return build_prospect_dossier(case_id, app.state.db_path)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/cases/{case_id}/prospect/prepare")
+    def post_case_prospect_prepare(case_id: int, discover_contacts: bool = True):
+        try:
+            return prepare_prospect(case_id, app.state.db_path, discover_contacts=discover_contacts)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.get("/api/cases/{case_id}/recommendation")
     def get_case_recommendation(case_id: int):
