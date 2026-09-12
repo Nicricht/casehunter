@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from .auto_service import run_auto_cycle
 from .database import backend_name, connect, init_db
 from .production_bootstrap import ALEMBIC_CASE_EXTERNAL_ID, ALEMBIC_BOOTSTRAP_KEY, bootstrap_alembic_pilot
+from .public_watch import run_active_watches
 
 LOGGER = logging.getLogger("uvicorn.error")
 LOGGER.setLevel(logging.INFO)
@@ -96,6 +97,18 @@ def _bootstrap_summary(value):
     }
 
 
+def _watch_summary(value):
+    value = value or {}
+    return {
+        "active_cases": int(value.get("active_cases") or 0),
+        "checked": int(value.get("checked") or 0),
+        "baselined": int(value.get("baselined") or 0),
+        "changes": int(value.get("changes") or 0),
+        "discovered_sources": int(value.get("discovered_sources") or 0),
+        "errors": int(value.get("errors") or 0),
+    }
+
+
 async def _automation_loop(app):
     if not RUN_ON_START:
         await asyncio.sleep(INTERVAL_MINUTES * 60)
@@ -115,6 +128,14 @@ async def _automation_loop(app):
             app.state.bootstrap = {"status": "ERROR", "error": type(exc).__name__}
 
     while True:
+        try:
+            watch_result = await asyncio.to_thread(run_active_watches)
+            app.state.last_watch = _watch_summary(watch_result)
+            LOGGER.info("Case Hunter public watcher completed: %s", app.state.last_watch)
+        except Exception as exc:
+            LOGGER.exception("Case Hunter public watcher failed")
+            app.state.last_watch = {"ok": False, "error": type(exc).__name__}
+
         try:
             result = await asyncio.to_thread(run_auto_cycle)
             app.state.last_run = {
@@ -144,6 +165,7 @@ def _database_ok():
 async def lifespan(app):
     init_db()
     app.state.last_run = None
+    app.state.last_watch = None
     app.state.bootstrap = None
     LOGGER.info("Case Hunter worker startup snapshot=%s", _production_snapshot())
     task = asyncio.create_task(_automation_loop(app))
@@ -170,6 +192,7 @@ def healthz():
         "database_ok": database_ok,
         "interval_minutes": INTERVAL_MINUTES,
         "bootstrap": getattr(app.state, "bootstrap", None),
+        "last_watch": getattr(app.state, "last_watch", None),
         "last_run": getattr(app.state, "last_run", None),
         "production_snapshot": _production_snapshot(),
     }
