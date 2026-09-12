@@ -1,4 +1,5 @@
 import hashlib
+import os
 from datetime import date
 
 from .config import STORE_REPLY_CONTENT
@@ -7,9 +8,18 @@ from .engines.reply_intelligence import REPLY_CLASSES, analyze_reply, classify_r
 from .gmail_service import fetch_replies, fetch_sent_messages, imap_configured
 from .pilot_metrics import start_pilot
 from .portfolio_discovery import refresh_due_pilot_portfolios
-from .public_watch import run_active_watches
 from .resolution_learning import refresh_active_pilot_recommendations
 from .repository import add_timeline_event, create_action, update_case_status
+from .watch_batch import run_bounded_active_watches
+
+WATCH_SOURCES_PER_CASE = max(
+    1,
+    min(100, int(os.getenv("CASE_HUNTER_WATCH_SOURCES_PER_CASE", "25"))),
+)
+MAX_WATCH_SOURCES_PER_CASE = max(
+    1,
+    min(2000, int(os.getenv("CASE_HUNTER_MAX_WATCH_SOURCES_PER_CASE", "250"))),
+)
 
 
 def list_replies(case_id=None, classification=None, limit=100, db_path=None):
@@ -215,9 +225,15 @@ def ingest_reply(reply, db_path=None):
 
 
 def _run_background_case_intelligence(db_path=None):
+    # Use the same bounded watcher as the production worker. This prevents reply
+    # synchronization from bypassing the per-case source budget.
+    public_watch = run_bounded_active_watches(
+        db_path=db_path,
+        source_limit_per_case=WATCH_SOURCES_PER_CASE,
+        max_sources_per_case=MAX_WATCH_SOURCES_PER_CASE,
+    )
     # Portfolios run before precedent learning so newly discovered resolved cases
     # are immediately available as evidence in the same cycle.
-    public_watch = run_active_watches(db_path=db_path)
     pilot_portfolios = refresh_due_pilot_portfolios(db_path=db_path)
     resolution_learning = refresh_active_pilot_recommendations(db_path=db_path)
     return {
