@@ -31,8 +31,10 @@ jobs:
       - name: Validate frontend JavaScript
         run: |
           node --check casehunter/static/app.js
+          node --check casehunter/static/commercial_dashboard.js
           node --check casehunter/static/portfolio.js
           node --check casehunter/static/client.js
+          grep -q '/static/commercial_dashboard.js' casehunter/static/index.html
       - name: Validate client portfolio assets
         run: |
           test -s casehunter/static/portfolios.html
