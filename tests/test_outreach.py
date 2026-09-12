@@ -28,6 +28,9 @@ class OutreachTests(unittest.TestCase):
         from casehunter.repository import get_case
         payload = build_outreach_email(get_case(self.case_id, self.db))
         self.assertIn("¿Se las envío?", payload["body"])
+        self.assertIn("Case Hunter", payload["body"])
+        self.assertIn("No represento al organismo ni a una empresa de cobranza", payload["body"])
+        self.assertIn("La utilidad concreta", payload["body"])
         self.assertNotIn("recuperar su dinero", payload["body"].lower())
 
     def test_draft_deduplicates(self):
