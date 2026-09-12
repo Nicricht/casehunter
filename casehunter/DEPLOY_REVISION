@@ -1,0 +1,2 @@
+deploy-trigger: 2026-09-12T00:00:00Z
+reason: force Railway to deploy current main after production healthcheck change
