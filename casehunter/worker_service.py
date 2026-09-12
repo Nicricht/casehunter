@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from .auto_service import run_auto_cycle
-from .database import backend_name, connect, init_db
+from .database import backend_name, connect, init_db, utc_now
 from .production_bootstrap import ALEMBIC_CASE_EXTERNAL_ID, ALEMBIC_BOOTSTRAP_KEY, bootstrap_alembic_pilot
 from .watch_batch import run_bounded_active_watches
 
@@ -25,6 +25,22 @@ def _query_one(sql, params=()):
         return connection.execute(sql, params).fetchone()
     except Exception:
         return None
+    finally:
+        connection.close()
+
+
+def _close_interrupted_runs(db_path=None):
+    """Mark orphaned RUNNING rows left by a worker restart before opening a new cycle."""
+    connection = connect(db_path)
+    try:
+        cursor = connection.execute(
+            """UPDATE automation_runs
+               SET finished_at=?,status='INTERRUPTED',error=COALESCE(error,?)
+               WHERE status='RUNNING'""",
+            (utc_now(), "Worker restarted before the automation cycle completed"),
+        )
+        connection.commit()
+        return max(0, int(cursor.rowcount or 0))
     finally:
         connection.close()
 
@@ -143,6 +159,9 @@ async def _automation_loop(app):
             app.state.last_watch = {"ok": False, "error": type(exc).__name__}
 
         try:
+            interrupted = await asyncio.to_thread(_close_interrupted_runs)
+            if interrupted:
+                LOGGER.warning("Closed %s interrupted automation run(s) before starting a new cycle", interrupted)
             result = await asyncio.to_thread(run_auto_cycle)
             app.state.last_run = {
                 "ok": True,
