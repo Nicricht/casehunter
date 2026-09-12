@@ -10,7 +10,7 @@ from .auto_service import run_auto_cycle
 from .database import backend_name, connect, init_db
 from .production_bootstrap import ALEMBIC_CASE_EXTERNAL_ID, ALEMBIC_BOOTSTRAP_KEY, bootstrap_alembic_pilot
 
-LOGGER = logging.getLogger("casehunter.worker")
+LOGGER = logging.getLogger("uvicorn.error")
 LOGGER.setLevel(logging.INFO)
 INTERVAL_MINUTES = max(60, int(os.getenv("CASE_HUNTER_AUTO_INTERVAL_MINUTES", "360")))
 RUN_ON_START = os.getenv("CASE_HUNTER_WORKER_RUN_ON_START", "1").strip().lower() not in {"0", "false", "no"}
