@@ -49,11 +49,11 @@ def build_outreach_email(case):
 
 Revisando antecedentes públicos encontré gestiones relacionadas con {company}{contract_phrase}, donde aparecen materias asociadas a {signal}.
 
-Estoy desarrollando una revisión orientada a detectar casos donde el cierre administrativo o financiero de contratos públicos puede seguir requiriendo seguimiento aun después de terminada la obra.
+Estoy desarrollando Case Hunter, una herramienta independiente que detecta y ordena antecedentes públicos sobre contratos, pagos y cierres administrativos con organismos públicos. No represento al organismo ni a una empresa de cobranza.
 
-En su caso encontré suficientes antecedentes públicos como para preparar una síntesis breve, separando lo que está confirmado de lo que todavía requeriría validación con ustedes.
+La utilidad concreta es preparar una ficha breve con cronología, fuentes públicas, señales del posible bloqueo y las siguientes gestiones que conviene validar, separando claramente lo confirmado de lo que todavía requiere información de la empresa.
 
-Si les interesa, puedo enviarles en una página las fechas, antecedentes y fuentes públicas que encontré.
+En su caso encontré suficientes antecedentes públicos para preparar esa síntesis de una página.
 
 ¿Se las envío?
 
