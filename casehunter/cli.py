@@ -5,12 +5,15 @@ import unittest
 
 import uvicorn
 
+from .commercial_lifecycle import commercial_metrics, set_commercial_status
+from .commercial_store import VALID_COMMERCIAL_STATUSES
 from .config import DEFAULT_LEY_LOBBY_URL
 from .database import init_db
 from .scanner_service import run_ley_lobby_scan
 from .auto_service import run_auto_cycle, run_daemon
 from .followup import process_due_followups
 from .pilot_metrics import pilot_funnel, start_pilot
+from .pilot_proposal import generate_pilot_proposal
 from .pilot_watch import build_watchlist
 from .portfolio_watch import list_portfolios
 from .reply_monitor import sync_replies
@@ -57,6 +60,23 @@ def main(argv=None):
     pilot_start = sub.add_parser("pilot-start", help="Marca un caso como piloto activo")
     pilot_start.add_argument("case_id", type=int, help="ID del caso")
     pilot_start.add_argument("--note", default=None, help="Contexto de aceptación del piloto")
+
+    sub.add_parser("commercial-metrics", help="Muestra métricas de conversión comercial y entregabilidad")
+
+    commercial_set = sub.add_parser("commercial-set", help="Actualiza el estado comercial de un caso")
+    commercial_set.add_argument("case_id", type=int, help="ID del caso")
+    commercial_set.add_argument("status", choices=sorted(VALID_COMMERCIAL_STATUSES), help="Estado comercial")
+    commercial_set.add_argument("--lost-reason", default=None, help="Motivo obligatorio cuando el estado es LOST")
+    commercial_set.add_argument("--pilot-price-clp", type=int, default=None)
+    commercial_set.add_argument("--monthly-price-clp", type=int, default=None)
+    commercial_set.add_argument("--expected-value-clp", type=int, default=None)
+    commercial_set.add_argument("--note", default=None)
+
+    pilot_proposal = sub.add_parser("pilot-proposal", help="Genera una propuesta de piloto de una página")
+    pilot_proposal.add_argument("case_id", type=int, help="ID del caso")
+    pilot_proposal.add_argument("--cases-limit", type=int, default=5)
+    pilot_proposal.add_argument("--days", type=int, default=30)
+    pilot_proposal.add_argument("--price-clp", type=int, default=None)
 
     scan = sub.add_parser("scan", help="Ejecuta un escaneo de Ley del Lobby")
     scan.add_argument("url", nargs="?", default=DEFAULT_LEY_LOBBY_URL)
@@ -117,6 +137,41 @@ def main(argv=None):
             print(json.dumps(start_pilot(args.case_id, args.note), ensure_ascii=False, indent=2))
             return 0
         except KeyError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+    if args.command == "commercial-metrics":
+        init_db()
+        print(json.dumps(commercial_metrics(), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "commercial-set":
+        init_db()
+        try:
+            result = set_commercial_status(
+                args.case_id,
+                args.status,
+                lost_reason=args.lost_reason,
+                pilot_price_clp=args.pilot_price_clp,
+                monthly_price_clp=args.monthly_price_clp,
+                expected_value_clp=args.expected_value_clp,
+                note=args.note,
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        except (KeyError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+    if args.command == "pilot-proposal":
+        init_db()
+        try:
+            result = generate_pilot_proposal(
+                args.case_id,
+                cases_limit=args.cases_limit,
+                pilot_days=args.days,
+                price_clp=args.price_clp,
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        except (KeyError, ValueError) as exc:
             print(str(exc), file=sys.stderr)
             return 2
     if args.command == "scan":

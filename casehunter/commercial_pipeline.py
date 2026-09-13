@@ -5,6 +5,13 @@ QUALIFYING_REPLY_CLASSES = {
     "NO_AGENCY_RESPONSE",
 }
 
+EXPLICIT_COMMERCIAL_STAGES = {
+    "PILOT_PROPOSED",
+    "PILOT_ACTIVE",
+    "WON",
+    "LOST",
+}
+
 STATUS_URGENCY = {
     "ACTION_REQUIRED": 10,
     "BLOCKER_IDENTIFIED": 9,
@@ -18,6 +25,12 @@ STATUS_URGENCY = {
 
 def commercial_stage(case):
     """Derive a commercial stage from facts already stored by Case Hunter."""
+    explicit = str(case.get("commercial_status") or "").strip().upper()
+    if explicit in EXPLICIT_COMMERCIAL_STAGES:
+        return explicit
+    if bool(case.get("has_pilot_started")):
+        return "PILOT_ACTIVE"
+
     status = str(case.get("status") or "")
     if status == "RESOLVED":
         return "CASE_RESOLVED"
@@ -61,6 +74,8 @@ def opportunity_score(case):
 
     stage = commercial_stage(case)
     engagement = {
+        "PILOT_ACTIVE": 25.0,
+        "PILOT_PROPOSED": 22.0,
         "WATCHING": 20.0,
         "QUALIFIED": 20.0,
         "REPLIED": 15.0,
@@ -68,6 +83,8 @@ def opportunity_score(case):
         "CONTACT_READY": 6.0,
         "RESEARCHED": 3.0,
         "NEW": 0.0,
+        "WON": 0.0,
+        "LOST": 0.0,
         "CASE_RESOLVED": 0.0,
         "CLOSED": 0.0,
     }.get(stage, 0.0)
@@ -83,7 +100,11 @@ def next_commercial_move(case):
         "CONTACT_READY": "Revisar el borrador y decidir si se aprueba el primer contacto.",
         "CONTACTED": "Esperar respuesta y ejecutar seguimiento solo cuando corresponda.",
         "REPLIED": "Clasificar la respuesta y definir si existe una oportunidad real.",
-        "QUALIFIED": "Preparar la síntesis del caso y convertir la respuesta en una acción concreta.",
+        "QUALIFIED": "Preparar una propuesta de piloto concreta y registrar si fue enviada.",
+        "PILOT_PROPOSED": "Conseguir aceptación explícita del piloto y fijar alcance, duración y precio.",
+        "PILOT_ACTIVE": "Demostrar valor medible: cambio detectado, evidencia ordenada o tiempo manual evitado.",
+        "WON": "Registrar ingreso real, mantener la cuenta y buscar renovación o expansión.",
+        "LOST": "Registrar el motivo de pérdida y usarlo para mejorar segmentación, oferta o timing.",
         "WATCHING": "Vigilar cambios públicos materiales y actuar solo cuando cambie el caso.",
         "CASE_RESOLVED": "Documentar el resultado y reutilizarlo como precedente para futuros casos.",
         "CLOSED": "No dedicar más esfuerzo comercial salvo nueva evidencia.",
@@ -113,5 +134,7 @@ def commercialize_case(case):
         reasons.append(f"respuesta {result['latest_reply_classification']}")
     if result.get("has_watch_action"):
         reasons.append("seguimiento público activo")
+    if result.get("commercial_status") and result.get("commercial_status") != "OPEN":
+        reasons.append(f"estado comercial {result['commercial_status']}")
     result["opportunity_reasons"] = reasons
     return result
