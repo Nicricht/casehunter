@@ -4,6 +4,8 @@ from datetime import date
 
 from .config import STORE_REPLY_CONTENT
 from .database import row_to_dict, transaction, utc_now
+from .delivery_health import mark_delivery_failure
+from .delivery_monitor import fetch_delivery_failures
 from .engines.reply_intelligence import REPLY_CLASSES, analyze_reply, classify_reply
 from .gmail_service import fetch_replies, fetch_sent_messages, imap_configured
 from .pilot_metrics import start_pilot
@@ -224,6 +226,73 @@ def ingest_reply(reply, db_path=None):
     return {"created": True, "reply": row_to_dict(row)}
 
 
+def ingest_delivery_failure(failure, db_path=None):
+    """Record a delivery failure without treating it as a prospect reply."""
+    outreach_id = int(failure["outreach_id"])
+    case_id = int(failure["case_id"])
+    recipient = (failure.get("recipient_email") or "").strip().lower()
+    provider_id = (failure.get("provider_message_id") or "").strip()
+    kind = (failure.get("failure_kind") or "BOUNCED").strip().upper()
+    if kind not in {"INVALID", "BLOCKED", "BOUNCED"}:
+        kind = "BOUNCED"
+    reason = (failure.get("reason") or "Delivery failure")[:2000]
+    now = utc_now()
+
+    with transaction(db_path) as conn:
+        current = conn.execute(
+            "SELECT id,status,recipient_email FROM outreach_messages WHERE id=? AND case_id=?",
+            (outreach_id, case_id),
+        ).fetchone()
+        if current is None:
+            raise KeyError("Mensaje de prospección no encontrado para el rebote")
+        if current["status"] in {"BOUNCED", "DELIVERY_BLOCKED"}:
+            return {"created": False, "failure_kind": kind, "outreach_id": outreach_id}
+
+    mark_delivery_failure(
+        recipient or current["recipient_email"],
+        kind,
+        reason=reason,
+        provider_message_id=provider_id or None,
+        db_path=db_path,
+    )
+
+    outbound_status = "DELIVERY_BLOCKED" if kind == "BLOCKED" else "BOUNCED"
+    rejected_email = recipient or (current["recipient_email"] or "").strip().lower()
+    with transaction(db_path) as conn:
+        conn.execute(
+            "UPDATE outreach_messages SET status=?,last_error=?,updated_at=? WHERE id=?",
+            (outbound_status, f"{kind}: {reason}", now, outreach_id),
+        )
+        conn.execute(
+            "UPDATE followups SET status='CANCELLED',updated_at=? WHERE outreach_id=? AND status IN ('PENDING','DUE','READY')",
+            (now, outreach_id),
+        )
+        if rejected_email:
+            conn.execute(
+                "UPDATE contacts SET status='REJECTED',updated_at=? WHERE lower(email)=?",
+                (now, rejected_email),
+            )
+
+    _ensure_action(
+        case_id,
+        "FIND_ALTERNATE_CONTACT",
+        "Buscar contacto corporativo alternativo verificado",
+        due_date=date.today().isoformat(),
+        note=f"El envío a {rejected_email or 'el contacto anterior'} falló ({kind}). No reutilizar esa dirección; validar un canal alternativo antes de preparar otro correo.",
+        db_path=db_path,
+    )
+    add_timeline_event(
+        case_id,
+        title=f"Fallo de entrega: {kind}",
+        details=f"Destinatario: {rejected_email or 'desconocido'}. {reason}"[:3000],
+        event_type="DELIVERY_FAILURE",
+        event_date=date.today().isoformat(),
+        source_url=None,
+        db_path=db_path,
+    )
+    return {"created": True, "failure_kind": kind, "outreach_id": outreach_id, "status": outbound_status}
+
+
 def _run_background_case_intelligence(db_path=None):
     # Use the same bounded watcher as the production worker. This prevents reply
     # synchronization from bypassing the per-case source budget.
@@ -249,18 +318,32 @@ def sync_replies(db_path=None):
         return {
             "configured": False, "checked": 0, "created": 0, "classifications": {},
             "manual_outreach_imported": 0,
+            "delivery_failures_checked": 0,
+            "delivery_failures_created": 0,
+            "delivery_failure_kinds": {},
             **intelligence,
         }
 
     manual = sync_manual_outreach(db_path)
     with transaction(db_path) as conn:
         rows = conn.execute(
-            """SELECT id,case_id,recipient_email,subject,provider_message_id,status
+            """SELECT id,case_id,contact_id,recipient_email,subject,provider_message_id,status
                FROM outreach_messages
                WHERE status IN ('SENT','REPLIED') AND recipient_email IS NOT NULL
                ORDER BY id DESC LIMIT 300"""
         ).fetchall()
     messages = [row_to_dict(row) for row in rows]
+
+    failures = fetch_delivery_failures(messages)
+    failures_created = 0
+    failure_kinds = {}
+    for failure in failures:
+        result = ingest_delivery_failure(failure, db_path)
+        if result["created"]:
+            failures_created += 1
+            kind = result["failure_kind"]
+            failure_kinds[kind] = failure_kinds.get(kind, 0) + 1
+
     incoming = fetch_replies(messages)
     created = 0
     classes = {}
@@ -280,5 +363,8 @@ def sync_replies(db_path=None):
         "manual_outreach_checked": manual["checked"],
         "manual_outreach_imported": manual["imported"],
         "manual_targets_ambiguous": manual["ambiguous"],
+        "delivery_failures_checked": len(failures),
+        "delivery_failures_created": failures_created,
+        "delivery_failure_kinds": failure_kinds,
         **intelligence,
     }
