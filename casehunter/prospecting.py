@@ -1,4 +1,5 @@
 from .contact_discovery import discover_contacts_for_case, list_contacts
+from .delivery_health import is_unusable_email
 from .outreach import build_outreach_email, ensure_outreach_draft, list_outreach
 from .repository import get_case
 
@@ -57,7 +58,15 @@ def _confirmed_facts(case):
     return facts
 
 
-def _pending_validation(case, contacts, evidence_sources):
+def _contact_is_active(item, db_path=None):
+    return bool(
+        item.get("status") != "REJECTED"
+        and item.get("email")
+        and not is_unusable_email(item.get("email"), db_path)
+    )
+
+
+def _pending_validation(case, contacts, evidence_sources, db_path=None):
     pending = []
     if not case.get("company_id") or not case.get("company_rut"):
         pending.append("Validar razón social/RUT con la empresa antes de tratar el caso como identidad confirmada.")
@@ -74,7 +83,7 @@ def _pending_validation(case, contacts, evidence_sources):
         pending.append("Validar documentación pendiente: " + ", ".join(missing_docs[:5]) + ".")
     trusted = [
         item for item in contacts
-        if item.get("status") != "REJECTED" and item.get("trust_decision") in TRUSTED_CONTACT_DECISIONS
+        if _contact_is_active(item, db_path) and item.get("trust_decision") in TRUSTED_CONTACT_DECISIONS
     ]
     if not trusted:
         pending.append("Encontrar o validar un contacto corporativo con evidencia suficiente antes de aprobar el primer correo.")
@@ -92,8 +101,10 @@ def _case_outreach(case_id, db_path=None):
         "SENT": 3,
         "REPLIED": 4,
         "FAILED": 5,
-        "REJECTED": 6,
-        "SKIPPED_DUPLICATE": 7,
+        "BOUNCED": 6,
+        "DELIVERY_BLOCKED": 7,
+        "REJECTED": 8,
+        "SKIPPED_DUPLICATE": 9,
     }
     messages.sort(key=lambda item: (priority.get(item.get("status"), 99), -int(item.get("id") or 0)))
     return messages[0]
@@ -107,14 +118,14 @@ def build_prospect_dossier(case_id, db_path=None):
     """
     case = get_case(case_id, db_path)
     contacts = list_contacts(case_id=case_id, db_path=db_path)
-    active_contacts = [item for item in contacts if item.get("status") != "REJECTED"]
+    active_contacts = [item for item in contacts if _contact_is_active(item, db_path)]
     trusted_contacts = [item for item in active_contacts if item.get("trust_decision") in TRUSTED_CONTACT_DECISIONS]
     best_contact = trusted_contacts[0] if trusted_contacts else (active_contacts[0] if active_contacts else None)
     existing = _case_outreach(case_id, db_path)
     recommended = build_outreach_email(case)
     sources = _dedupe_sources(case)
     confirmed = _confirmed_facts(case)
-    pending = _pending_validation(case, contacts, sources)
+    pending = _pending_validation(case, contacts, sources, db_path)
 
     if existing:
         message = {
@@ -163,7 +174,7 @@ def prepare_prospect(case_id, db_path=None, discover_contacts=True):
     contacts = list_contacts(case_id=case_id, db_path=db_path)
     trusted = [
         item for item in contacts
-        if item.get("status") != "REJECTED" and item.get("trust_decision") in TRUSTED_CONTACT_DECISIONS
+        if _contact_is_active(item, db_path) and item.get("trust_decision") in TRUSTED_CONTACT_DECISIONS
     ]
     selected = trusted[0] if trusted else None
     if selected:
