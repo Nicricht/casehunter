@@ -34,6 +34,7 @@ from .resolution_learning import apply_resolution_recommendation, resolution_rec
 from .auto_service import auto_status, list_auto_runs, run_auto_cycle
 from .client_auth import list_client_users
 from .client_routes import register_client_routes
+from .commercial_routes import register_commercial_routes
 from .contact_discovery import list_contacts
 from .followup import list_followups, process_due_followups
 from .gmail_service import imap_configured
@@ -92,6 +93,7 @@ def create_app(db_path=None, auth_username=None, auth_password=None):
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     register_client_routes(app, STATIC_DIR)
+    register_commercial_routes(app)
 
     @app.get("/")
     def index():
