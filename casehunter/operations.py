@@ -1,4 +1,6 @@
+from .commercial_lifecycle import commercial_metrics
 from .commercial_pipeline import commercialize_case
+from .commercial_store import ensure_commercial_schema
 from .database import row_to_dict, transaction
 from .pilot_metrics import pilot_funnel
 
@@ -23,6 +25,7 @@ def _ratio(numerator, denominator):
 def operations_snapshot(db_path=None, top_limit=10):
     """Return business-facing KPIs and ranked commercial opportunities."""
     top_limit = max(1, min(50, int(top_limit)))
+    ensure_commercial_schema(db_path)
     with transaction(db_path) as conn:
         case_rows = conn.execute("SELECT status,COUNT(*) n FROM cases GROUP BY status").fetchall()
         status_counts = {row["status"]: int(row["n"]) for row in case_rows}
@@ -42,12 +45,12 @@ def operations_snapshot(db_path=None, top_limit=10):
         open_actions = int(conn.execute("SELECT COUNT(*) n FROM actions WHERE status NOT IN ('DONE','CANCELLED')").fetchone()["n"])
         due_followups = int(conn.execute("SELECT COUNT(*) n FROM followups WHERE status IN ('DUE','READY')").fetchone()["n"])
 
-        # Fetch a wider candidate pool and rank in Python so engagement can outrank
-        # raw financial priority when a real company has already replied.
         candidate_limit = max(200, top_limit * 10)
         rows = conn.execute(
             """SELECT k.id,k.detected_company_name,k.contract_ref,k.agency,k.status,
                       k.financial_priority,k.confidence_score,k.confidence_label,k.current_blocker,
+                      COALESCE(co.status,'OPEN') commercial_status,
+                      co.pilot_price_clp,co.monthly_price_clp,co.expected_value_clp,co.lost_reason,
                       COALESCE((
                           SELECT MAX(COALESCE(a.trust_score,0))
                           FROM contacts c LEFT JOIN contact_assessments a ON a.contact_id=c.id
@@ -75,15 +78,22 @@ def operations_snapshot(db_path=None, top_limit=10):
                       CASE WHEN (
                           SELECT COUNT(*) FROM actions ac
                           WHERE ac.case_id=k.id AND ac.action_type='WATCH_PUBLIC_CASE' AND ac.status='TODO'
-                      )>0 THEN 1 ELSE 0 END has_watch_action
+                      )>0 THEN 1 ELSE 0 END has_watch_action,
+                      CASE WHEN (
+                          SELECT COUNT(*) FROM timeline_events te
+                          WHERE te.case_id=k.id AND te.event_type='PILOT_STARTED'
+                      )>0 THEN 1 ELSE 0 END has_pilot_started
                FROM cases k
+               LEFT JOIN commercial_opportunities co ON co.case_id=k.id
                WHERE k.status NOT IN ('RESOLVED','DISMISSED')
+                 AND COALESCE(co.status,'OPEN') NOT IN ('WON','LOST')
                ORDER BY k.financial_priority DESC,k.id DESC
                LIMIT ?""",
             (candidate_limit,),
         ).fetchall()
 
     pilots = pilot_funnel(limit=500, db_path=db_path)
+    commercial = commercial_metrics(db_path=db_path)
     pilot_counts = pilots["counts"]
     opportunities = [commercialize_case(row_to_dict(row)) for row in rows]
     opportunities.sort(
@@ -115,13 +125,25 @@ def operations_snapshot(db_path=None, top_limit=10):
             "followups_due": due_followups,
             "reply_rate": _ratio(replies, sent),
             "resolution_rate": _ratio(resolved_cases, total_cases),
-            "pilots_active": pilots["active_pilots"],
+            "pilots_active": max(pilots["active_pilots"], commercial["pilots_active"]),
             "pilot_engaged": pilot_counts["ENGAGED"],
             "pilot_problem_confirmed": pilot_counts["PROBLEM_CONFIRMED"],
             "pilot_resolved": pilots["resolved"],
+            "delivery_failures": commercial["delivery_failures"],
+            "delivery_rate": commercial["delivery_rate"],
+            "positive_replies": commercial["positive_replies"],
+            "qualified_opportunities": commercial["qualified_opportunities"],
+            "pilots_proposed": commercial["pilots_proposed"],
+            "won": commercial["won"],
+            "lost": commercial["lost"],
+            "win_rate": commercial["win_rate"],
+            "avg_response_hours": commercial["avg_response_hours"],
+            "pipeline_expected_value_clp": commercial["pipeline_expected_value_clp"],
+            "won_monthly_revenue_clp": commercial["won_monthly_revenue_clp"],
         },
         "case_statuses": status_counts,
         "commercial_stages_top": stage_counts,
+        "commercial_metrics": commercial,
         "pilot_funnel": pilots,
         "top_opportunities": opportunities,
     }
