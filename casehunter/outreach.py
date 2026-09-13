@@ -6,12 +6,13 @@ import smtplib
 
 from .config import SMTP_FROM_NAME, SMTP_HOST, SMTP_PASSWORD, SMTP_PORT, SMTP_USERNAME
 from .database import row_to_dict, transaction, utc_now
+from .delivery_health import is_unusable_email
 from .repository import get_case
 
 EMAIL_RE = re.compile(r"^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$", re.I)
 VALID_OUTREACH_STATUSES = {
     "NEEDS_CONTACT", "READY_FOR_APPROVAL", "APPROVED", "SENT", "REPLIED",
-    "FAILED", "REJECTED", "SKIPPED_DUPLICATE",
+    "FAILED", "REJECTED", "SKIPPED_DUPLICATE", "BOUNCED", "DELIVERY_BLOCKED",
 }
 
 
@@ -68,6 +69,12 @@ def _dedupe_key(case_id, recipient_email):
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _assert_recipient_usable(email, db_path=None):
+    address = (email or "").strip().lower()
+    if address and is_unusable_email(address, db_path):
+        raise ValueError("El correo está suprimido por un fallo de entrega anterior; busca un contacto alternativo")
+
+
 def list_outreach(status=None, db_path=None):
     query = """SELECT o.*, k.detected_company_name, k.contract_ref, k.financial_priority,
                       c.company_name contact_company, c.source_url contact_source_url
@@ -97,6 +104,8 @@ def ensure_outreach_draft(case_id, recipient_email=None, contact_id=None, db_pat
     email = (recipient_email or "").strip().lower() or None
     if email and not EMAIL_RE.match(email):
         raise ValueError("El correo de contacto no es válido")
+    if email:
+        _assert_recipient_usable(email, db_path)
     payload = build_outreach_email(case)
     key = _dedupe_key(case_id, email)
     now = utc_now()
@@ -142,6 +151,7 @@ def attach_recipient(message_id, recipient_email, contact_id=None, db_path=None)
     email = (recipient_email or "").strip().lower()
     if not EMAIL_RE.match(email):
         raise ValueError("El correo de contacto no es válido")
+    _assert_recipient_usable(email, db_path)
     message = get_outreach(message_id, db_path)
     key = _dedupe_key(message["case_id"], email)
     now = utc_now()
@@ -164,6 +174,7 @@ def approve_outreach(message_id, recipient_email=None, db_path=None):
         raise ValueError("El mensaje ya fue enviado")
     if not message.get("recipient_email"):
         raise ValueError("Falta un correo de destinatario confirmado")
+    _assert_recipient_usable(message["recipient_email"], db_path)
     now = utc_now()
     with transaction(db_path) as conn:
         conn.execute("UPDATE outreach_messages SET status='APPROVED',approved_at=?,updated_at=?,last_error=NULL WHERE id=?", (now, now, int(message_id)))
@@ -203,6 +214,7 @@ def send_outreach(message_id, db_path=None, sender=None):
         raise ValueError("El mensaje debe estar aprobado antes de enviarse")
     if message["status"] == "FAILED" and not message.get("approved_at"):
         raise ValueError("El mensaje fallido no tiene aprobación previa")
+    _assert_recipient_usable(message.get("recipient_email"), db_path)
 
     if sender is None:
         from .gmail_service import imap_configured, was_recipient_contacted
