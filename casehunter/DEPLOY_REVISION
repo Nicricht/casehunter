@@ -1,2 +1,2 @@
-deploy-trigger: 2026-09-12T00:00:00Z
-reason: force Railway to deploy current main after production healthcheck change
+deploy-trigger: 2026-09-13T13:21:00Z
+reason: force Railway worker to rebuild from current main after commercial lifecycle API deployment
